@@ -13,21 +13,13 @@ if str(ROOT) not in sys.path:
 import components.filters as fx
 
 # Utils
-from pages.teacher_wellbeing.utils import (
+from fellow_wellbeing.utils.wellbeing_utils import (
     TERMS, ALL_ITEMS, DIMENSIONS, COLORS, SCORE_MIN, SCORE_MAX,
     load_wellbeing_data, risk_bucket, order_terms, dimension_scores
 )
 
-from pages.teacher_wellbeing.tabs import (
-    overview,
-    progression,
-    domains,
-    indicators,
-    risk,
-    fellows,
-    data
-
-)
+# Tabs
+from fellow_wellbeing.tabs import overview, progression, domains, indicators, risk, fellows, data as data_tab
 
 # =========================
 # Page Config
@@ -102,8 +94,11 @@ with tab_indicators:
 with tab_risk:
     risk.render(filtered, ALL_ITEMS, COLORS, risk_bucket)
 
+with tab_fellows:
+    fellows.render(filtered, DIMENSIONS, COLORS, SCORE_MIN, SCORE_MAX, risk_bucket)
+
 with tab_data:
-    data.render(filtered, ALL_ITEMS, risk_bucket)
+    data_tab.render(filtered, ALL_ITEMS, risk_bucket)
     
 st.divider()
 st.caption("🌱 Fellow Wellbeing Survey Dashboard • Streamlit • Term-focused (Overall first)")
