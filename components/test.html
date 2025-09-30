@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TTN Fellowship Impact Report 2024/25</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        color: #333;
+      }
+
+      .container {
+        max-width: 1400px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        overflow: hidden;
+      }
+
+      /* Header */
+      .header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 3rem 2rem;
+      }
+
+      .header-content {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .main-title {
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+      }
+
+      .subtitle {
+        font-size: 1.1rem;
+        opacity: 0.9;
+      }
+
+      .report-info {
+        text-align: right;
+      }
+
+      .report-label {
+        font-size: 0.875rem;
+        opacity: 0.8;
+        margin-bottom: 0.25rem;
+      }
+
+      .report-value {
+        font-size: 1.5rem;
+        font-weight: 600;
+      }
+
+      /* Content */
+      .content {
+        padding: 2rem;
+      }
+
+      .section {
+        margin-bottom: 3rem;
+      }
+
+      .section-title {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: #1f77b4;
+        margin-bottom: 1.5rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 3px solid #667eea;
+      }
+
+      /* KPI Cards */
+      .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 1.5rem;
+        margin-bottom: 2rem;
+      }
+
+      .kpi-card {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        padding: 1.5rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+
+      .kpi-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+      }
+
+      .kpi-label {
+        font-size: 0.875rem;
+        font-weight: 600;
+        color: #666;
+        text-transform: uppercase;
+      }
+
+      .kpi-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5rem;
+      }
+
+      .bg-blue {
+        background: #4a90e2;
+      }
+      .bg-green {
+        background: #50c878;
+      }
+      .bg-purple {
+        background: #9b59b6;
+      }
+      .bg-orange {
+        background: #f39c12;
+      }
+
+      .kpi-value {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1f77b4;
+        margin-bottom: 0.25rem;
+      }
+
+      .kpi-description {
+        font-size: 0.875rem;
+        color: #666;
+      }
+
+      /* Charts */
+      .chart-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+        gap: 2rem;
+        margin-bottom: 2rem;
+      }
+
+      .chart-card {
+        background: white;
+        border: 1px solid #e0e0e0;
+        border-radius: 12px;
+        padding: 1.5rem;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+      }
+
+      .chart-title {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 0.5rem;
+      }
+
+      .chart-description {
+        font-size: 0.875rem;
+        color: #666;
+        margin-bottom: 1rem;
+      }
+
+      /* Table */
+      .table-card {
+        background: white;
+        border: 1px solid #e0e0e0;
+        border-radius: 12px;
+        padding: 1.5rem;
+        overflow-x: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th {
+        background: #f5f7fa;
+        padding: 1rem;
+        text-align: left;
+        font-weight: 600;
+        color: #333;
+        border-bottom: 2px solid #667eea;
+      }
+
+      td {
+        padding: 1rem;
+        border-bottom: 1px solid #e0e0e0;
+      }
+
+      tr:hover {
+        background: #f9fafb;
+      }
+
+      .rank-badge {
+        display: inline-block;
+        width: 32px;
+        height: 32px;
+        background: #667eea;
+        color: white;
+        border-radius: 50%;
+        text-align: center;
+        line-height: 32px;
+        font-weight: 600;
+      }
+
+      .positive {
+        color: #50c878;
+        font-weight: 600;
+      }
+      .negative {
+        color: #e74c3c;
+        font-weight: 600;
+      }
+
+      /* Spotlight */
+      .spotlight {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 12px;
+        margin-bottom: 2rem;
+      }
+
+      .spotlight-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 2rem;
+        margin-top: 1.5rem;
+      }
+
+      .spotlight-metric {
+        text-align: center;
+      }
+
+      .spotlight-label {
+        font-size: 0.875rem;
+        opacity: 0.9;
+        margin-bottom: 0.5rem;
+      }
+
+      .spotlight-value {
+        font-size: 2rem;
+        font-weight: 700;
+      }
+
+      .spotlight-desc {
+        font-size: 0.875rem;
+        opacity: 0.8;
+        margin-top: 0.25rem;
+      }
+
+      @media print {
+        body {
+          background: white;
+          padding: 0;
+        }
+        .container {
+          box-shadow: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <!-- Header -->
+      <div class="header">
+        <div class="header-content">
+          <div>
+            <h1 class="main-title">TTN Fellowship Impact Report</h1>
+            <p class="subtitle">
+              Academic Year 2024/25 • Term 1 to Term 2 Analysis
+            </p>
+          </div>
+          <div class="report-info">
+            <div class="report-label">Report Generated</div>
+            <div class="report-value">September 2025</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Content -->
+      <div class="content">
+        <!-- Executive Summary -->
+        <div class="section">
+          <h2 class="section-title">Executive Summary</h2>
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-header">
+                <h3 class="kpi-label">Total Learners</h3>
+                <div class="kpi-icon bg-blue">👥</div>
+              </div>
+              <div class="kpi-value">3,247</div>
+              <p class="kpi-description">Across 87 classes</p>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-header">
+                <h3 class="kpi-label">Average Improvement</h3>
+                <div class="kpi-icon bg-green">📈</div>
+              </div>
+              <div class="kpi-value">+8.2pp</div>
+              <p class="kpi-description">Term 1 to Term 2</p>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-header">
+                <h3 class="kpi-label">Classes Passing</h3>
+                <div class="kpi-icon bg-purple">✅</div>
+              </div>
+              <div class="kpi-value">65 (+12)</div>
+              <p class="kpi-description">Above 50% threshold</p>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-header">
+                <h3 class="kpi-label">Fellows Tracked</h3>
+                <div class="kpi-icon bg-orange">👨‍🏫</div>
+              </div>
+              <div class="kpi-value">95</div>
+              <p class="kpi-description">Across the program</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Spotlight -->
+        <div class="spotlight">
+          <h2 style="font-size: 1.75rem; margin-bottom: 0.5rem">
+            🎯 Foundation Phase Spotlight
+          </h2>
+          <p style="opacity: 0.9; margin-bottom: 1.5rem">
+            Grades 1-3 showing exceptional growth
+          </p>
+
+          <div class="spotlight-grid">
+            <div class="spotlight-metric">
+              <div class="spotlight-label">Students</div>
+              <div class="spotlight-value">892</div>
+              <p class="spotlight-desc">27% of cohort</p>
+            </div>
+            <div class="spotlight-metric">
+              <div class="spotlight-label">Improvement</div>
+              <div class="spotlight-value">+12.4pp</div>
+              <p class="spotlight-desc">Highest across phases</p>
+            </div>
+            <div class="spotlight-metric">
+              <div class="spotlight-label">Pass Rate</div>
+              <div class="spotlight-value">78%</div>
+              <p class="spotlight-desc">Up from 65%</p>
+            </div>
+            <div class="spotlight-metric">
+              <div class="spotlight-label">High Growth</div>
+              <div class="spotlight-value">423</div>
+              <p class="spotlight-desc">47% of students</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="section">
+          <h2 class="section-title">Performance Analysis</h2>
+          <div class="chart-grid">
+            <div class="chart-card">
+              <h3 class="chart-title">Subject Performance</h3>
+              <p class="chart-description">Average improvement by subject</p>
+              <canvas id="subjectChart"></canvas>
+            </div>
+
+            <div class="chart-card">
+              <h3 class="chart-title">Phase Comparison</h3>
+              <p class="chart-description">Term 1 vs Term 2 averages</p>
+              <canvas id="phaseChart"></canvas>
+            </div>
+          </div>
+
+          <div class="chart-card" style="margin-top: 2rem">
+            <h3 class="chart-title">Fellowship Year Performance</h3>
+            <p class="chart-description">Year 1 vs Year 2 fellows comparison</p>
+            <canvas id="yearChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Top Performers -->
+        <div class="section">
+          <h2 class="section-title">Top Performing Fellows</h2>
+          <div class="table-card">
+            <table>
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Fellow Name</th>
+                  <th>Subject</th>
+                  <th>Grade</th>
+                  <th>Students</th>
+                  <th>T1 Avg</th>
+                  <th>T2 Avg</th>
+                  <th>Improvement</th>
+                </tr>
+              </thead>
+              <tbody id="fellowsTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Sample data
+      const fellows = [
+        {
+          name: "Sarah Ndlovu",
+          subject: "Mathematics",
+          grade: 8,
+          students: 42,
+          t1: 48.2,
+          t2: 67.8,
+        },
+        {
+          name: "Thabo Mthembu",
+          subject: "English",
+          grade: 5,
+          students: 38,
+          t1: 52.1,
+          t2: 70.3,
+        },
+        {
+          name: "Lindiwe Khumalo",
+          subject: "Life Sciences",
+          grade: 10,
+          students: 35,
+          t1: 45.6,
+          t2: 62.9,
+        },
+        {
+          name: "Sipho Dlamini",
+          subject: "Mathematics",
+          grade: 9,
+          students: 40,
+          t1: 50.3,
+          t2: 67.1,
+        },
+        {
+          name: "Nomsa Zulu",
+          subject: "Afrikaans",
+          grade: 7,
+          students: 36,
+          t1: 54.2,
+          t2: 69.8,
+        },
+        {
+          name: "Bongani Nkosi",
+          subject: "Physical Science",
+          grade: 11,
+          students: 33,
+          t1: 43.8,
+          t2: 59.2,
+        },
+        {
+          name: "Zanele Mahlangu",
+          subject: "History",
+          grade: 9,
+          students: 37,
+          t1: 49.5,
+          t2: 64.7,
+        },
+        {
+          name: "Mandla Shabalala",
+          subject: "Geography",
+          grade: 10,
+          students: 34,
+          t1: 47.9,
+          t2: 62.5,
+        },
+      ];
+
+      // Populate fellows table
+      const tbody = document.getElementById("fellowsTable");
+      fellows.forEach((f, i) => {
+        const imp = f.t2 - f.t1;
+        tbody.innerHTML += `
+                <tr>
+                    <td><span class="rank-badge">${i + 1}</span></td>
+                    <td>${f.name}</td>
+                    <td>${f.subject}</td>
+                    <td>Grade ${f.grade}</td>
+                    <td>${f.students}</td>
+                    <td>${f.t1.toFixed(1)}%</td>
+                    <td>${f.t2.toFixed(1)}%</td>
+                    <td class="positive">+${imp.toFixed(1)}pp</td>
+                </tr>
+            `;
+      });
+
+      // Subject Chart
+      new Chart(document.getElementById("subjectChart"), {
+        type: "bar",
+        data: {
+          labels: [
+            "Mathematics",
+            "English",
+            "Life Sciences",
+            "Physical Sciences",
+            "Languages",
+            "Social Sciences",
+          ],
+          datasets: [
+            {
+              label: "Improvement (pp)",
+              data: [9.2, 8.7, 7.5, 6.8, 8.1, 7.3],
+              backgroundColor: [
+                "#667eea",
+                "#4A90E2",
+                "#50C878",
+                "#9B59B6",
+                "#F39C12",
+                "#E74C3C",
+              ],
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: "Improvement (pp)" },
+            },
+          },
+        },
+      });
+
+      // Phase Chart
+      new Chart(document.getElementById("phaseChart"), {
+        type: "bar",
+        data: {
+          labels: ["Foundation", "Intermediate", "Senior", "FET"],
+          datasets: [
+            {
+              label: "Term 1",
+              data: [52.3, 48.7, 46.2, 44.8],
+              backgroundColor: "#4A90E2",
+            },
+            {
+              label: "Term 2",
+              data: [64.7, 56.9, 54.5, 51.2],
+              backgroundColor: "#50C878",
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              max: 100,
+              title: { display: true, text: "Average (%)" },
+            },
+          },
+        },
+      });
+
+      // Year Chart
+      new Chart(document.getElementById("yearChart"), {
+        type: "bar",
+        data: {
+          labels: ["Year 1 Fellows", "Year 2 Fellows"],
+          datasets: [
+            { label: "Term 1", data: [47.8, 51.2], backgroundColor: "#4A90E2" },
+            { label: "Term 2", data: [56.3, 61.7], backgroundColor: "#50C878" },
+          ],
+        },
+        options: {
+          responsive: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              max: 100,
+              title: { display: true, text: "Average (%)" },
+            },
+          },
+        },
+      });
+    </script>
+  </body>
+</html>
