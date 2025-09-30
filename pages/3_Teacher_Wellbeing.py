@@ -13,6 +13,8 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
+import components.filters as fx
+
 
 # =========================
 # Page Config
@@ -147,54 +149,68 @@ def load_wellbeing_data():
 
 df_surveys = load_wellbeing_data()
 
-
 # =========================
-# Sidebar Filters (global)
+# Top Filter Bar (replaces sidebar)
 # =========================
-with st.sidebar:
-    st.header("🎛️ Filters")
-    st.caption("Apply across all tabs.")
+fx.topbar(
+    "📊 Classroom Observations Dashboard",
+    "Tracking teaching quality across HITS domains with termly progression"
+)
 
-    flt_terms = st.multiselect(
+toolbar = st.container()
+with toolbar:
+    st.markdown("### 🎛️ Filters")
+    c1, c2, c3, c4, c5 = st.columns([1.2, 1.2, 1.2, 1.0, 0.7])
+
+    # Use the low-level helpers so we can place widgets into specific columns
+    flt_terms = fx._multiselect(
         "Term",
-        options=TERMS,
-        default=TERMS,
+        options=TERM_OPTIONS,
+        default=TERM_OPTIONS,
         key="flt_terms",
+        target=c1,
     )
-    flt_phase = st.multiselect(
-        "School Phase",
-        options=sorted(df_surveys["phase"].unique()),
-        default=sorted(df_surveys["phase"].unique()),
-        key="flt_phase",
+
+    flt_subjects = fx._multiselect(
+        "Subject",
+        options=sorted(SUBJECTS),
+        default=list(SUBJECTS),
+        key="flt_subjects",
+        target=c2,
     )
-    flt_year = st.radio(
+
+    # Sort grades numerically but be robust
+    def _grade_key(g):
+        try:
+            if isinstance(g, (int, float)): return int(g)
+            return int(str(g).split()[-1])
+        except Exception:
+            return 9999
+
+    grade_sorted = sorted(GRADES, key=_grade_key)
+    flt_grades = fx._multiselect(
+        "Grade",
+        options=grade_sorted,
+        default=grade_sorted,
+        key="flt_grades",
+        target=c3,
+    )
+
+    flt_year = fx._radio(
         "Fellowship Year",
         options=["Both", "Year 1", "Year 2"],
-        horizontal=True,
         key="flt_year",
-    )
-    flt_coaches = st.multiselect(
-        "Facilitator",
-        options=sorted(df_surveys["name_of_facilitator"].unique()),
-        default=sorted(df_surveys["name_of_facilitator"].unique()),
-        key="flt_coaches",
+        horizontal=True,
+        index=0,
+        target=c4,
     )
 
-    st.markdown("---")
-    if st.button("♻️ Reset filters", use_container_width=True):
-        reset_filters()
-        st.experimental_rerun()
-
-# Apply filters
-filtered = df_surveys[
-    df_surveys["term"].isin(st.session_state.get("flt_terms", TERMS))
-    & df_surveys["phase"].isin(st.session_state.get("flt_phase", list(df_surveys["phase"].unique())))
-    & df_surveys["name_of_facilitator"].isin(st.session_state.get("flt_coaches", list(df_surveys["name_of_facilitator"].unique())))
-].copy()
-
-if st.session_state.get("flt_year", "Both") != "Both":
-    y = 1 if st.session_state["flt_year"].endswith("1") else 2
-    filtered = filtered[filtered["fellowship_year"] == y]
+    # Reset button on the far right
+    if fx.reset_button("♻️ Reset", key="reset_topbar", target=c5):
+        for k in list(st.session_state.keys()):
+            if k.startswith("flt_") or k.startswith("tab_"):
+                del st.session_state[k]
+        st.rerun()
 
 # =========================
 # Header
