@@ -1,6 +1,6 @@
 # app.py
 import streamlit as st
-import filters as fx
+import components.filters as fx
 
 st.set_page_config(page_title="Fellowship Dashboard", page_icon="📊", layout="wide")
 
@@ -13,8 +13,3 @@ if fx.reset_button(target=st.sidebar):
     fx.reset_global_filters()
     st.experimental_rerun()
 
-st.markdown("### 🔗 Sections")
-st.page_link("pages/1_Scale.py",                  label="Scale",                  icon="🗺️")
-st.page_link("pages/2_Classroom_Observations.py", label="Classroom Observations", icon="📋")
-st.page_link("pages/3_Academic_Results.py",       label="Academic Results",       icon="📚")
-st.page_link("pages/4_Teacher_Wellbeing.py",      label="Teacher Wellbeing",      icon="🌱")

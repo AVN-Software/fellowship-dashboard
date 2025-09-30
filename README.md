@@ -321,3 +321,128 @@ fellowship-dashboard
    └─ supabase.py
 
 ```
+```
+fellowship-dashboard
+├─ app.py
+├─ charts.py
+├─ components
+│  ├─ filters.py
+│  ├─ tab_bar.py
+│  └─ __init__.py
+├─ config
+│  ├─ config.json
+│  ├─ config.py
+│  └─ __init__.py
+├─ data
+│  ├─ exports
+│  │  ├─ columns.json
+│  │  ├─ domain_performance.json
+│  │  ├─ fellow_summary.json
+│  │  ├─ lesson_observations.json
+│  │  ├─ lesson_observations.json.backup_20250912_065140
+│  │  ├─ lesson_observations.json.backup_20250912_070820
+│  │  ├─ observation_scores.json
+│  │  ├─ pre-norm.json
+│  │  ├─ tables.json
+│  │  ├─ table_schemas.json
+│  │  ├─ table_schemas.json.bak
+│  │  └─ term_progression.json
+│  ├─ observations.json
+│  ├─ schema
+│  │  └─ academic-results.json
+│  ├─ term-comparison.json
+│  └─ wellbeing.json
+├─ enhanced_tier_analysis
+│  ├─ analysis
+│  │  ├─ movement.py
+│  │  ├─ summaries.py
+│  │  ├─ tier_mix_analysis.py
+│  │  ├─ trends.py
+│  │  └─ __init__.py
+│  ├─ charts
+│  │  ├─ comparative.py
+│  │  ├─ create_tier_distribution_chart.py
+│  │  ├─ performance.py
+│  │  ├─ strategic.py
+│  │  ├─ tier_mix_charts.py
+│  │  └─ __init__.py
+│  ├─ config.py
+│  ├─ integration.py
+│  ├─ page.py
+│  ├─ sections
+│  │  ├─ comparative_section.py
+│  │  ├─ performance_section.py
+│  │  ├─ strategic_section.py
+│  │  └─ tier_mix_section.py
+│  ├─ tables
+│  │  ├─ tier_mix_tables.py
+│  │  └─ __init__.py
+│  └─ __init__.py
+├─ pages
+│  ├─ 1_Classroom_Observations
+│  │  ├─ analysis
+│  │  │  ├─ movement.py
+│  │  │  ├─ summaries.py
+│  │  │  ├─ tier_mix_analysis.py
+│  │  │  ├─ trends.py
+│  │  │  └─ __init__.py
+│  │  ├─ charts
+│  │  │  ├─ 1_classroom_observations_chart.py
+│  │  │  ├─ comparative.py
+│  │  │  ├─ create_tier_distribution_chart.py
+│  │  │  ├─ performance.py
+│  │  │  ├─ strategic.py
+│  │  │  └─ tier_mix_charts.py
+│  │  ├─ enhanced_tier_analysis
+│  │  │  ├─ charts
+│  │  │  │  └─ __init__.py
+│  │  │  ├─ config.py
+│  │  │  ├─ integration.py
+│  │  │  ├─ page.py
+│  │  │  ├─ tables
+│  │  │  │  └─ __init__.py
+│  │  │  └─ __init__.py
+│  │  ├─ page.py
+│  │  ├─ sections.py
+│  │  ├─ tables
+│  │  │  ├─ 1_classroom_observations_table.py
+│  │  │  └─ tier_mix_tables.py
+│  │  ├─ tier_progression.py
+│  │  └─ __init__.py
+│  ├─ 1_Classroom_Observations.py
+│  ├─ 2_Academic_Results
+│  │  ├─ charts
+│  │  │  └─ 2_academic_results_chart.py
+│  │  ├─ page.py
+│  │  ├─ tables
+│  │  │  └─ 2_academic_results_table.py
+│  │  └─ __init__.py
+│  ├─ 2_Academic_Results.py
+│  ├─ 3_Teacher_Wellbeing
+│  │  ├─ charts
+│  │  │  └─ 3_teacher_wellbeing_chart.py
+│  │  ├─ page.py
+│  │  ├─ tables
+│  │  │  └─ data_explorer.py
+│  │  └─ __init__.py
+│  ├─ 3_Teacher_Wellbeing.py
+│  └─ 4_Scale.py
+├─ README.md
+├─ requirements.txt
+├─ secrets.toml
+└─ utils
+   ├─ data
+   │  ├─ loader.py
+   │  ├─ schema_loader.py
+   │  └─ __init__.py
+   ├─ database
+   │  ├─ connection.py
+   │  ├─ crud_utils.py
+   │  └─ __init__.py
+   ├─ supabase
+   │  ├─ database_manager.py
+   │  ├─ supabase_connection.py
+   │  └─ test_connection.py
+   └─ supabase.py
+
+```

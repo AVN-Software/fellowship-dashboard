@@ -377,52 +377,6 @@ def render_phase_performance(df):
         else:
             st.dataframe(phase_perf)
 
-
-def render_full_data_table(df):
-    """Render the complete academic results table."""
-    st.markdown("### 📋 Complete Academic Results Table")
-    st.caption("Full dataset with all classes and performance metrics")
-    
-    # Select and format columns for display
-    display_df = df[[
-        'fellow_name', 'year_display', 'subject', 'grade', 'phase',
-        'class_size', 'term_1_pct', 'term_2_pct', 'improvement_pct',
-        'pass_term_2'
-    ]].copy()
-    
-    display_df.columns = [
-        'Fellow', 'Year', 'Subject', 'Grade', 'Phase',
-        'Class Size', 'Term 1 (%)', 'Term 2 (%)', 'Improvement (pp)', 'Passing'
-    ]
-    
-    # Format numeric columns
-    display_df['Term 1 (%)'] = display_df['Term 1 (%)'].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
-    display_df['Term 2 (%)'] = display_df['Term 2 (%)'].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "-")
-    display_df['Improvement (pp)'] = display_df['Improvement (pp)'].apply(lambda x: f"{x:+.1f}" if pd.notna(x) else "-")
-    display_df['Passing'] = display_df['Passing'].apply(lambda x: "✅" if x else "❌")
-    
-    # Add filters
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        year_filter = st.multiselect("Filter by Year", options=df['year_display'].unique(), default=df['year_display'].unique())
-    with col2:
-        subject_filter = st.multiselect("Filter by Subject", options=sorted(df['subject'].unique()), default=[])
-    with col3:
-        phase_filter = st.multiselect("Filter by Phase", options=sorted(df['phase'].unique()), default=[])
-    
-    # Apply filters
-    filtered_df = display_df.copy()
-    if year_filter:
-        filtered_df = filtered_df[filtered_df['Year'].isin(year_filter)]
-    if subject_filter:
-        filtered_df = filtered_df[filtered_df['Subject'].isin(subject_filter)]
-    if phase_filter:
-        filtered_df = filtered_df[filtered_df['Phase'].isin(phase_filter)]
-    
-    st.dataframe(filtered_df, use_container_width=True, height=400)
-    st.caption(f"Showing {len(filtered_df)} of {len(display_df)} classes")
-
-
 # ========================================
 # MAIN SECTION RENDERER
 # ========================================
