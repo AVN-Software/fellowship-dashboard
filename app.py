@@ -1,478 +1,630 @@
-# pages/program_scale.py
-# ------------------------------------------------------------
-# Program Scale Component (Live Data / No Test Fixtures)
-# Story: Scale & Reach → Growth Journey → Diverse & Representative
-# Depends on: utils.supabase.database_manager.get_db()
-# ------------------------------------------------------------
+# app.py
+# =============================================================================
+# CLASSROOM OBSERVATION REPORT 2025 — Read-only Streamlit
+# - Uses ONLY existing materialized views (no CREATE/REFRESH).
+# - Exact headings/wording kept as provided.
+# - One renderer per MV: render_<materialized_view_name>().
+# - Exports the full bottom section (markdown + all tables) as .md and .xlsx
+# =============================================================================
+# .streamlit/secrets.toml (Supabase)
+# [supabase]
+# url     = "https://<your-project>.supabase.co"
+# anon_key = "<YOUR_ANON_KEY>"
+# =============================================================================
+
+from __future__ import annotations
+from datetime import datetime
+from typing import Dict, Optional
+import io
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 
-from typing import Optional, Dict, Any, List
-
-# Altair is optional; table fallback if missing
-try:
-    import altair as alt
-    ALT_AVAILABLE = True
-except Exception:
-    ALT_AVAILABLE = False
-
-# === Your existing helper (already in your repo) ===
 from utils.supabase.database_manager import get_db
 
+st.set_page_config(page_title="CLASSROOM OBSERVATION REPORT 2025", layout="wide")
 
-# -------------------------------
-# Data Loading (Supabase)
-# -------------------------------
+
+# ---------------------------------------
+# Load ALL materialized views (page-local)
+# ---------------------------------------
 @st.cache_data(show_spinner=False)
-def _fetch_table_names() -> List[str]:
-    """
-    Best-effort discovery of available tables/views to enable graceful fallbacks.
-    Requires PostgREST schema browsing to be enabled. If not, we’ll just guess.
-    """
-    try:
-        sb = get_db()
-        # Some PostgREST installations expose / or rpc to list; if not, we catch and move on
-        # We use a tiny probe: try a few common tables to see which respond.
-        candidates = [
-            "fellows",
-            "academic_results",
-            "classes",
-            "program_stats_yearly",
-        ]
-        available = []
-        for t in candidates:
-            try:
-                # lightweight select 1
-                resp = sb.table(t).select("*", count="exact").range(0, 0).execute()
-                if resp.data is not None:
-                    available.append(t)
-            except Exception:
-                pass
-        return available
-    except Exception:
-        return []
-
-
-@st.cache_data(show_spinner=True)
-def load_fellows_df() -> pd.DataFrame:
-    """
-    Loads fellows with key columns used by the component.
-    Required table: public.fellows
-    Expected columns (some optional):
-      - id (uuid/text)
-      - status (e.g., 'Active')
-      - year_of_fellowship (int)
-      - gender (text)
-      - province_of_origin (text)
-      - school_assignment_id (uuid/text)  # optional but used for school counts
-      - year_of_entry (text/int)          # optional; used for growth if available
-    """
-    sb = get_db()
-    cols = [
-        "id",
-        "status",
-        "year_of_fellowship",
-        "gender",
-        "province_of_origin",
-        "school_assignment_id",
-        "year_of_entry",
+def load_mvs() -> Dict[str, pd.DataFrame]:
+    db = get_db()
+    mv_names = [
+        # Section 1
+        "mv_s1_2_longitudinal_fellow_tracking",
+        "mv_s1_3_coverage_by_fellowship_year",
+        "mv_s1_4_coverage_by_coach",
+        # Section 2
+        "mv_s2_1_program_wide_domain_evolution",
+        "mv_s2_2_domains_showing_strongest_improvement",
+        "mv_s2_3_domains_stuck_at_tier1",
+        "mv_s2_4_overall_program_improvement_summary",
+        # Section 3
+        "mv_s3_1_year1_vs_year2_gap_evolution",
+        "mv_s3_2_year1_fellow_development_trajectory",
+        "mv_s3_3_experience_gap_change_over_time",
+        # Section 4
+        "mv_s4_1_overall_phase_performance_trajectory",
+        "mv_s4_2_domain_performance_by_phase",
+        "mv_s4_3_phase_performance_summary_term3_only",
+        # Section 5
+        "mv_s5_1_subject_category_performance",
+        "mv_s5_2_mathematics_classes_all_domain_performance",
+        "mv_s5_3_language_classes_all_domain_performance",
+        "mv_s5_4_literacy_vs_numeracy_in_math_classes",
+        "mv_s5_5_specific_language_subject_performance_literacy",
+        # Section 6
+        "mv_s6_1_critical_phase_subject_combinations",
+        # Section 7
+        "mv_s7_1_high_growth_fellows",
+        "mv_s7_2_stagnant_declining_fellows",
+        "mv_s7_3_fellow_domain_specific_patterns_high_growth",
+        # Section 8
+        "mv_s8_1_class_size_impact_on_performance",
+        "mv_s8_2_coach_portfolio_performance",
     ]
-    # Select only columns that exist; if select fails, we retry with fewer columns
-    try:
-        resp = sb.table("fellows").select(",".join(cols)).execute()
-        df = pd.DataFrame(resp.data or [])
-    except Exception:
-        # Minimal must-haves
-        fallback_cols = ["id", "status", "year_of_fellowship", "gender", "province_of_origin"]
-        resp = sb.table("fellows").select(",".join(fallback_cols)).execute()
-        df = pd.DataFrame(resp.data or [])
-        # ensure optional columns exist (as NaN) for downstream code
-        for c in set(cols) - set(df.columns):
-            df[c] = pd.NA
-    return df
 
-
-@st.cache_data(show_spinner=True)
-def load_learners_df() -> Optional[pd.DataFrame]:
-    """
-    Tries to load a dataframe that can yield class_size sums for total learners.
-    Preferred tables/views (first hit wins):
-      1) academic_results (expects column class_size)
-      2) classes (expects column class_size)
-    Returns None if nothing usable is found.
-    """
-    sb = get_db()
-    table_order = [
-        ("academic_results", ["class_size"]),
-        ("classes", ["class_size"]),
-    ]
-    for table, need_cols in table_order:
+    data: Dict[str, pd.DataFrame] = {}
+    for name in mv_names:
         try:
-            resp = sb.table(table).select(",".join(need_cols)).execute()
-            df = pd.DataFrame(resp.data or [])
-            if not df.empty and all(c in df.columns for c in need_cols):
-                return df
+            data[name] = get_db()._safe_table(name)  # RLS must allow read
+        except Exception as e:
+            st.error(f"Error loading {name}: {e}")
+            data[name] = pd.DataFrame()
+    return data
+
+
+# Load all materialized views at once (cached)
+dfs = load_mvs()
+
+
+# -----------------------------
+# Helpers + Recorder for Export
+# -----------------------------
+class ReportRecorder:
+    """
+    Collects all text (Markdown) + tables rendered on the page,
+    so we can export the whole bottom section as Markdown + Excel.
+    """
+    def __init__(self):
+        self.md_chunks: list[str] = []
+        self.tables: Dict[str, pd.DataFrame] = {}
+
+    # ----- Text -----
+    def md(self, text: str):
+        """Write markdown to page and capture for export."""
+        st.markdown(text)
+        self.md_chunks.append(text if text.endswith("\n") else text + "\n")
+
+    def hr(self):
+        st.write("---")
+        self.md_chunks.append("\n---\n")
+
+    # ----- Tables -----
+    def table(self, df: pd.DataFrame, name: Optional[str] = None, caption: Optional[str] = None):
+        """Render a df and capture it as well."""
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        if caption:
+            st.caption(caption)
+
+        # Save table for exports
+        key = name or f"Table_{len(self.tables)+1}"
+        self.tables[key] = df.copy()
+
+        # Also add a light Markdown snapshot (first 50 rows) for the .md export
+        try:
+            snap = df.head(50)
+            self.md_chunks.append(f"\n**{key}**\n\n")
+            self.md_chunks.append(snap.to_markdown(index=False) + "\n\n")
+            if caption:
+                self.md_chunks.append(f"*{caption}*\n\n")
         except Exception:
-            continue
-    return None
+            # to_markdown may fail if wide dtypes; skip silently
+            pass
+
+    # ----- Exporters -----
+    def export_markdown(self) -> str:
+        return "".join(self.md_chunks)
+
+    def export_excel(self) -> bytes:
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+            for name, df in self.tables.items():
+                sheet = name[:31] if name else "Sheet1"
+                try:
+                    df.to_excel(writer, sheet_name=sheet, index=False)
+                except Exception:
+                    # fallback to plain cast
+                    df.astype(str).to_excel(writer, sheet_name=sheet, index=False)
+        buf.seek(0)
+        return buf.getvalue()
 
 
-@st.cache_data(show_spinner=True)
-def load_program_stats_yearly() -> Optional[pd.DataFrame]:
+rec = ReportRecorder()
+
+
+def _order_dataframe(df: pd.DataFrame, order_by: str | None) -> pd.DataFrame:
     """
-    Optional: if you maintain a yearly stats table/view (program_stats_yearly) with:
-      - year (int)
-      - fellows (int)
-      - provinces (int)
-      - schools (int)  [optional]
-    we’ll use it for the Growth Journey. Otherwise we’ll derive from fellows.
+    Lightweight ORDER BY parser supporting: "col1, col2 DESC, col3 ASC"
     """
-    sb = get_db()
+    if df is None or df.empty or not order_by:
+        return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
+    parts = [p.strip() for p in order_by.split(",")]
+    cols: list[str] = []
+    asc: list[bool] = []
+    for p in parts:
+        tokens = p.split()
+        col = tokens[0]
+        direction = tokens[1].upper() if len(tokens) > 1 else "ASC"
+        if col in df.columns:
+            cols.append(col)
+            asc.append(direction != "DESC")
+    if not cols:
+        return df
     try:
-        resp = sb.table("program_stats_yearly").select("year,fellows,provinces,schools").order("year", desc=False).execute()
-        df = pd.DataFrame(resp.data or [])
-        if not df.empty and "year" in df.columns and "fellows" in df.columns:
-            # ensure int typing if possible
-            for c in ["year", "fellows", "provinces", "schools"]:
-                if c in df.columns:
-                    df[c] = pd.to_numeric(df[c], errors="coerce")
-            df = df.sort_values("year")
-            return df
+        return df.sort_values(cols, ascending=asc)
     except Exception:
-        pass
-    return None
+        return df
 
 
-# -------------------------------
-# Metrics
-# -------------------------------
-def calculate_program_scale_metrics(fellows_df: pd.DataFrame, learners_df: Optional[pd.DataFrame]) -> Dict[str, Any]:
-    # Active filter
-    active = fellows_df.copy()
-    if "status" in fellows_df.columns:
-        active = fellows_df[fellows_df["status"].str.lower() == "active"].copy()
+def get_mv(name: str, order_by: str | None = None) -> pd.DataFrame:
+    df = dfs.get(name, pd.DataFrame())
+    return _order_dataframe(df, order_by)
 
-    metrics = {
-        "total_fellows": int(len(active)),
-        "total_schools": int(active["school_assignment_id"].nunique()) if "school_assignment_id" in active.columns else None,
-        "total_provinces": int(active["province_of_origin"].nunique()) if "province_of_origin" in active.columns else None,
-        "year_1_fellows": int((active["year_of_fellowship"] == 1).sum()) if "year_of_fellowship" in active.columns else None,
-        "year_2_fellows": int((active["year_of_fellowship"] == 2).sum()) if "year_of_fellowship" in active.columns else None,
-        "female_count": int((active["gender"] == "Female").sum()) if "gender" in active.columns else None,
-        "male_count": int((active["gender"] == "Male").sum()) if "gender" in active.columns else None,
-        "total_learners": None,
-        "total_classes": None,
+
+def pct_fmt(x):
+    try:
+        return f"{float(x):.1f}%"
+    except Exception:
+        return x
+
+
+# =============================================================================
+# EXACT-NAME RENDERERS (1:1 with your MVs)
+# =============================================================================
+def render_mv_s1_2_longitudinal_fellow_tracking():
+    df = get_mv("mv_s1_2_longitudinal_fellow_tracking", order_by="terms_observed DESC")
+    rec.table(df, name="mv_s1_2_longitudinal_fellow_tracking")
+
+def render_mv_s1_3_coverage_by_fellowship_year():
+    df = get_mv("mv_s1_3_coverage_by_fellowship_year", order_by="term, fellowship_year")
+    rec.table(df, name="mv_s1_3_coverage_by_fellowship_year")
+
+def render_mv_s1_4_coverage_by_coach():
+    df = get_mv("mv_s1_4_coverage_by_coach", order_by="coach_name, term")
+    rec.table(df, name="mv_s1_4_coverage_by_coach")
+
+def render_mv_s2_1_program_wide_domain_evolution():
+    df = get_mv("mv_s2_1_program_wide_domain_evolution", order_by="domain, term")
+    rec.table(df, name="mv_s2_1_program_wide_domain_evolution")
+
+def render_mv_s2_2_domains_showing_strongest_improvement():
+    df = get_mv("mv_s2_2_domains_showing_strongest_improvement", order_by="tier3_improvement DESC")
+    rec.table(df, name="mv_s2_2_domains_showing_strongest_improvement")
+
+def render_mv_s2_3_domains_stuck_at_tier1():
+    df = get_mv("mv_s2_3_domains_stuck_at_tier1", order_by="domain, term")
+    rec.table(df, name="mv_s2_3_domains_stuck_at_tier1")
+
+def render_mv_s2_4_overall_program_improvement_summary():
+    df = get_mv("mv_s2_4_overall_program_improvement_summary", order_by="term")
+    rec.table(df, name="mv_s2_4_overall_program_improvement_summary")
+
+def render_mv_s3_1_year1_vs_year2_gap_evolution():
+    df = get_mv("mv_s3_1_year1_vs_year2_gap_evolution", order_by="domain, term")
+    rec.table(df, name="mv_s3_1_year1_vs_year2_gap_evolution")
+
+def render_mv_s3_2_year1_fellow_development_trajectory():
+    df = get_mv("mv_s3_2_year1_fellow_development_trajectory", order_by="domain, term")
+    rec.table(df, name="mv_s3_2_year1_fellow_development_trajectory")
+
+def render_mv_s3_3_experience_gap_change_over_time():
+    df = get_mv("mv_s3_3_experience_gap_change_over_time", order_by="gap_change DESC")
+    rec.table(df, name="mv_s3_3_experience_gap_change_over_time")
+
+def render_mv_s4_1_overall_phase_performance_trajectory():
+    df = get_mv("mv_s4_1_overall_phase_performance_trajectory", order_by="phase, term")
+    rec.table(df, name="mv_s4_1_overall_phase_performance_trajectory")
+
+def render_mv_s4_2_domain_performance_by_phase():
+    df = get_mv("mv_s4_2_domain_performance_by_phase", order_by="phase, domain, term")
+    rec.table(df, name="mv_s4_2_domain_performance_by_phase")
+
+def render_mv_s4_3_phase_performance_summary_term3_only():
+    df = get_mv("mv_s4_3_phase_performance_summary_term3_only", order_by="phase, pct_tier3 DESC")
+    rec.table(df, name="mv_s4_3_phase_performance_summary_term3_only")
+
+def render_mv_s5_1_subject_category_performance():
+    df = get_mv("mv_s5_1_subject_category_performance", order_by="subject_category, term")
+    rec.table(df, name="mv_s5_1_subject_category_performance")
+
+def render_mv_s5_2_mathematics_classes_all_domain_performance():
+    df = get_mv("mv_s5_2_mathematics_classes_all_domain_performance", order_by="domain, term")
+    rec.table(df, name="mv_s5_2_mathematics_classes_all_domain_performance")
+
+def render_mv_s5_3_language_classes_all_domain_performance():
+    df = get_mv("mv_s5_3_language_classes_all_domain_performance", order_by="domain, term")
+    rec.table(df, name="mv_s5_3_language_classes_all_domain_performance")
+
+def render_mv_s5_4_literacy_vs_numeracy_in_math_classes():
+    df = get_mv("mv_s5_4_literacy_vs_numeracy_in_math_classes", order_by="domain, term")
+    rec.table(df, name="mv_s5_4_literacy_vs_numeracy_in_math_classes")
+
+def render_mv_s5_5_specific_language_subject_performance_literacy():
+    df = get_mv("mv_s5_5_specific_language_subject_performance_literacy", order_by="subject, term")
+    rec.table(df, name="mv_s5_5_specific_language_subject_performance_literacy")
+
+def render_mv_s6_1_critical_phase_subject_combinations():
+    df = get_mv("mv_s6_1_critical_phase_subject_combinations", order_by="improvement ASC")
+    rec.table(df, name="mv_s6_1_critical_phase_subject_combinations")
+
+def render_mv_s7_1_high_growth_fellows():
+    df = get_mv("mv_s7_1_high_growth_fellows", order_by="growth DESC")
+    rec.table(df, name="mv_s7_1_high_growth_fellows")
+
+def render_mv_s7_2_stagnant_declining_fellows():
+    df = get_mv("mv_s7_2_stagnant_declining_fellows", order_by="change ASC")
+    rec.table(df, name="mv_s7_2_stagnant_declining_fellows")
+
+def render_mv_s7_3_fellow_domain_specific_patterns_high_growth():
+    df = get_mv("mv_s7_3_fellow_domain_specific_patterns_high_growth", order_by="fellow_name, domain")
+    rec.table(df, name="mv_s7_3_fellow_domain_specific_patterns_high_growth")
+
+def render_mv_s8_1_class_size_impact_on_performance():
+    df = get_mv("mv_s8_1_class_size_impact_on_performance", order_by="class_size_category, term")
+    rec.table(df, name="mv_s8_1_class_size_impact_on_performance")
+
+def render_mv_s8_2_coach_portfolio_performance():
+    df = get_mv("mv_s8_2_coach_portfolio_performance", order_by="coach_name, term")
+    rec.table(df, name="mv_s8_2_coach_portfolio_performance")
+
+
+# =============================================================================
+# PAGE BODY — EXACT WORDING/PLACEMENT + TABLES FROM MVs
+# (All text + tables go through ReportRecorder -> exportable)
+# =============================================================================
+
+rec.md("# CLASSROOM OBSERVATION REPORT 2025")
+rec.md("## Teaching Quality Development: HITS Performance Across Terms 1-3")
+rec.hr()
+
+rec.md("## EXECUTIVE SUMMARY")
+rec.md("""
+**What HITS Measures:**
+High-Impact Teaching Strategies (HITS) assess teaching quality across 5 domains, each scored on a 3-tier developmental continuum:
+- **Tier 1 (Foundational)**: Essential baseline practices
+- **Tier 2 (Developing)**: Adaptive, sophisticated strategies  
+- **Tier 3 (Advanced)**: Mastery, differentiation, responsive teaching
+""")
+
+# ---- Executive Summary table (fill from mv_s2_4 and static counts) ----------
+exec_df = pd.DataFrame({
+    "Metric": ["Observations", "Fellows Observed", "Average Domain Score", "% Tier 3 (Advanced)"],
+    "Term 1": ["50", "47", "", ""],
+    "Term 2": ["90", "89", "", ""],
+    "Term 3": ["130", "118", "", ""],
+    "Change": ["+160%", "+151%", "", ""],
+})
+try:
+    prog = get_mv("mv_s2_4_overall_program_improvement_summary", order_by="term")
+    for t in ["Term 1", "Term 2", "Term 3"]:
+        row = prog.loc[prog["term"] == t]
+        if not row.empty:
+            exec_df.loc[exec_df["Metric"]=="Average Domain Score", t] = f'{float(row["overall_avg_score"].iloc[0]):.2f}'
+            exec_df.loc[exec_df["Metric"]=="% Tier 3 (Advanced)", t] = f'{float(row["overall_pct_tier3"].iloc[0]):.1f}%'
+    def delta(a, b):
+        try: return f'{(float(b)-float(a)):+.2f}'
+        except: return ""
+    def delta_pct(a, b):
+        try: return f'{(float(b)-float(a)):+.1f}%'
+        except: return ""
+    exec_df.loc[exec_df["Metric"]=="Average Domain Score","Change"] = delta(exec_df["Term 1"][2] or np.nan, exec_df["Term 3"][2] or np.nan)
+    exec_df.loc[exec_df["Metric"]=="% Tier 3 (Advanced)","Change"] = delta_pct((exec_df["Term 1"][3] or "0").rstrip("%"), (exec_df["Term 3"][3] or "0").rstrip("%"))
+except Exception as e:
+    st.caption(f"Note: Could not derive averages from mv_s2_4_overall_program_improvement_summary ({e}).")
+
+rec.md("**The Year in Numbers:**")
+rec.table(exec_df, name="Executive_Summary_The_Year_in_Numbers")
+
+rec.md("""
+**Key Findings:**
+[Populated from Query 2.2 - Top improving domains]  
+[Populated from Query 2.3 - Persistent gaps]  
+[Populated from Query 3.1 - Experience effect patterns]
+""")
+
+rec.hr()
+rec.md("## 1. OBSERVATION COVERAGE & QUALITY")
+
+rec.md("### 1.1 Observation Activity Across Terms")
+obs_shell = pd.DataFrame({
+    "Term": ["Term 1","Term 2","Term 3","Program Total"],
+    "Observations": ["50","90","130","270"],
+    "Fellows": ["47","89","118","[Unique]"],
+    "Coaches": ["5","6","6","6"],
+    "Avg Class Size": ["46","38","39","40 avg"],
+    "Avg Attendance": ["95.9%","95.2%","94.1%","95.1% avg"]
+})
+rec.table(obs_shell, name="Observation_Activity_Shell")
+
+rec.md("""
+**Data Collection Improved:**
+- 160% increase in observations from T1 to T3
+- Coverage expanded from 52% to full cohort by T2
+- T3 exceeds cohort size, indicating multiple observations per fellow in final term
+
+**Teaching Conditions:**
+- Class size normalized from 46 to 38-39 learners (better data or context shift)
+- Consistent 94-96% attendance indicates normal teaching conditions observed
+""")
+
+rec.md("### 1.2 Longitudinal Fellow Tracking")
+rec.md("**[Populate from Query 1.2]**")
+render_mv_s1_2_longitudinal_fellow_tracking()
+
+rec.md("### 1.3 Coverage by Fellowship Year")
+rec.md("**[Populate from Query 1.3]**")
+render_mv_s1_3_coverage_by_fellowship_year()
+
+rec.hr()
+rec.md("## 2. DOMAIN PERFORMANCE TRAJECTORIES")
+
+rec.md("### 2.1 Program-Wide Evolution")
+rec.md("**[Populate from Query 2.1 - Create multi-line chart showing Tier 3 % for all 6 domains across 3 terms]**")
+render_mv_s2_1_program_wide_domain_evolution()
+
+rec.md("### 2.2 Domains Showing Strongest Improvement")
+rec.md("**[Populate from Query 2.2]**")
+render_mv_s2_2_domains_showing_strongest_improvement()
+
+rec.md("### 2.3 Persistent Gaps")
+rec.md("**[Populate from Query 2.3 - Domains >60% Tier 1]**")
+render_mv_s2_3_domains_stuck_at_tier1()
+
+rec.md("### 2.4 Overall Program Quality Score")
+rec.md("**[Populate from Query 2.4]**")
+render_mv_s2_4_overall_program_improvement_summary()
+
+rec.hr()
+rec.md("## 3. EXPERIENCE EFFECT ANALYSIS")
+
+rec.md("### 3.1 Year 1 vs Year 2 Gap Evolution")
+rec.md("**[Populate from Query 3.1 - Create grouped bar chart for each domain showing Y1 vs Y2 across terms]**")
+render_mv_s3_1_year1_vs_year2_gap_evolution()
+
+rec.md("### 3.2 Year 1 Fellow Development Trajectory")
+rec.md("**[Populate from Query 3.2]**")
+render_mv_s3_2_year1_fellow_development_trajectory()
+
+rec.md("### 3.3 Experience Gap Trends")
+rec.md("**[Populate from Query 3.3]**")
+render_mv_s3_3_experience_gap_change_over_time()
+
+rec.hr()
+rec.md("## 4. PHASE-SPECIFIC PERFORMANCE")
+
+rec.md("### 4.1 Overall Phase Trajectories")
+rec.md("**[Populate from Query 4.1]**")
+render_mv_s4_1_overall_phase_performance_trajectory()
+
+rec.md("### 4.2 Domain Performance by Phase")
+rec.md("**[Populate from Query 4.2 - Create heatmap showing each phase × domain × term]**")
+render_mv_s4_2_domain_performance_by_phase()
+
+rec.md("### 4.3 Phase Performance Summary (Term 3 Snapshot)")
+rec.md("**[Populate from Query 4.3]**")
+render_mv_s4_3_phase_performance_summary_term3_only()
+
+rec.hr()
+rec.md("## 5. SUBJECT-SPECIFIC PERFORMANCE")
+
+rec.md("### 5.1 Subject Category Trajectories")
+rec.md("**[Populate from Query 5.1]**")
+render_mv_s5_1_subject_category_performance()
+
+rec.md("### 5.2 Mathematics Classes - Full Domain Profile")
+rec.md("**[Populate from Query 5.2]**")
+render_mv_s5_2_mathematics_classes_all_domain_performance()
+
+rec.md("### 5.3 Language Classes - Full Domain Profile")
+rec.md("**[Populate from Query 5.3]**")
+render_mv_s5_3_language_classes_all_domain_performance()
+
+rec.md("### 5.4 Literacy vs Numeracy in Math Classes")
+rec.md("**[Populate from Query 5.4]**")
+render_mv_s5_4_literacy_vs_numeracy_in_math_classes()
+
+rec.md("### 5.5 Language-Specific Literacy Performance")
+rec.md("**[Populate from Query 5.5]**")
+render_mv_s5_5_specific_language_subject_performance_literacy()
+
+rec.hr()
+rec.md("## 6. PHASE × SUBJECT INTERACTIONS")
+
+rec.md("### 6.1 Critical Combinations")
+rec.md("**[Populate from Query 6.1]**")
+render_mv_s6_1_critical_phase_subject_combinations()
+
+rec.hr()
+rec.md("## 7. INDIVIDUAL FELLOW TRAJECTORIES")
+
+rec.md("### 7.1 High-Growth Fellows")
+rec.md("**[Populate from Query 7.1]**")
+render_mv_s7_1_high_growth_fellows()
+
+rec.md("### 7.2 Stagnant/Declining Fellows")
+rec.md("**[Populate from Query 7.2]**")
+render_mv_s7_2_stagnant_declining_fellows()
+
+rec.md("### 7.3 Fellow Domain-Specific Patterns (High-Growth)")
+rec.md("**[Populate from Query 7.3]**")
+render_mv_s7_3_fellow_domain_specific_patterns_high_growth()
+
+rec.hr()
+rec.md("## 8. CONTEXTUAL FACTORS")
+
+rec.md("### 8.1 Class Size Impact")
+rec.md("**[Populate from Query 8.1]**")
+render_mv_s8_1_class_size_impact_on_performance()
+
+rec.md("### 8.2 Coach Portfolio Performance")
+rec.md("**[Populate from Query 8.2]**")
+render_mv_s8_2_coach_portfolio_performance()
+
+rec.hr()
+rec.md("## 9. KEY FINDINGS")
+rec.md("""
+### 9.1 What Improved
+[Based on Query 2.2 results]
+
+### 9.2 What Stagnated
+[Based on Query 2.3 results]
+
+### 9.3 Experience Effect Summary
+[Based on Query 3.3 results]
+
+### 9.4 Phase-Specific Patterns
+[Based on Query 4.3 results]
+
+### 9.5 Subject-Specific Patterns
+[Based on Query 5.1 results]
+""")
+
+rec.hr()
+rec.md("## 10. RECOMMENDATIONS")
+rec.md("""
+### 10.1 Based on Domain Trajectories
+**What Worked (Scale It):**
+- [Interventions that showed improvement]
+
+**What Didn't Work (Redesign It):**
+- [Persistent gaps requiring new approach]
+
+### 10.2 Phase-Specific Interventions
+[Based on phase patterns]
+
+### 10.3 Subject-Specific Support
+[Based on subject patterns]
+
+### 10.4 Fellow-Specific Actions
+- High-growth fellows: Leverage as peer coaches
+- Stagnant fellows: Intensive intervention plan
+""")
+
+rec.hr()
+rec.md("## 11. CONCLUSION")
+rec.md("""
+**The 3-Term Story:**
+[Synthesize what longitudinal data shows about teaching quality development]
+
+**Evidence-Based Next Steps:**
+[What Year 2 should focus on based on actual patterns observed]
+
+---
+
+**Report Length:** 15-20 pages with visuals  
+**Data Source:** PostgreSQL queries executed against observations and domain_scores tables  
+**Analysis Period:** Terms 1-3, 2025  
+**Total Observations:** 270 across 118 unique fellows
+""")
+
+
+
+# =============================================================================
+# EXPORT / COPY — single-click downloads (Markdown + Excel)
+# =============================================================================
+st.write("")
+st.write("")
+st.subheader("⬇️ Export / Copy")
+md_bytes = rec.export_markdown().encode("utf-8")
+st.download_button(
+    "Download Full Report (Markdown)",
+    data=md_bytes,
+    file_name=f"classroom_observation_report_{datetime.now().date()}.md",
+    mime="text/markdown",
+    use_container_width=True,
+)
+
+xlsx_bytes = rec.export_excel()
+st.download_button(
+    "Download All Tables (Excel)",
+    data=xlsx_bytes,
+    file_name=f"classroom_observation_report_tables_{datetime.now().date()}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True,
+)
+
+# Option 3 (updated): Export to Excel by Section, not per MV
+excel_buffer = io.BytesIO()
+with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
+    # Define sections with their MV names
+    sections = {
+        "Section 1 - Coverage & Quality": [
+            "mv_s1_2_longitudinal_fellow_tracking",
+            "mv_s1_3_coverage_by_fellowship_year",
+            "mv_s1_4_coverage_by_coach",
+        ],
+        "Section 2 - Domain Performance": [
+            "mv_s2_1_program_wide_domain_evolution",
+            "mv_s2_2_domains_showing_strongest_improvement",
+            "mv_s2_3_domains_stuck_at_tier1",
+            "mv_s2_4_overall_program_improvement_summary",
+        ],
+        "Section 3 - Experience Effects": [
+            "mv_s3_1_year1_vs_year2_gap_evolution",
+            "mv_s3_2_year1_fellow_development_trajectory",
+            "mv_s3_3_experience_gap_change_over_time",
+        ],
+        "Section 4 - Phase Performance": [
+            "mv_s4_1_overall_phase_performance_trajectory",
+            "mv_s4_2_domain_performance_by_phase",
+            "mv_s4_3_phase_performance_summary_term3_only",
+        ],
+        "Section 5 - Subject Performance": [
+            "mv_s5_1_subject_category_performance",
+            "mv_s5_2_mathematics_classes_all_domain_performance",
+            "mv_s5_3_language_classes_all_domain_performance",
+            "mv_s5_4_literacy_vs_numeracy_in_math_classes",
+            "mv_s5_5_specific_language_subject_performance_literacy",
+        ],
+        "Section 6 - Phase x Subject": [
+            "mv_s6_1_critical_phase_subject_combinations",
+        ],
+        "Section 7 - Fellow Trajectories": [
+            "mv_s7_1_high_growth_fellows",
+            "mv_s7_2_stagnant_declining_fellows",
+            "mv_s7_3_fellow_domain_specific_patterns_high_growth",
+        ],
+        "Section 8 - Contextual Factors": [
+            "mv_s8_1_class_size_impact_on_performance",
+            "mv_s8_2_coach_portfolio_performance",
+        ],
     }
 
-    if learners_df is not None and not learners_df.empty and "class_size" in learners_df.columns:
-        metrics["total_learners"] = int(pd.to_numeric(learners_df["class_size"], errors="coerce").fillna(0).sum())
-        metrics["total_classes"] = int(len(learners_df))
-
-    return metrics
-
-
-def build_growth_from_fellows(fellows_df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """
-    If you don’t have program_stats_yearly, we approximate growth by grouping fellows
-    by year_of_entry (preferred) or by inferring from year_of_fellowship if possible.
-    """
-    df = fellows_df.copy()
-    # Prefer explicit year_of_entry
-    if "year_of_entry" in df.columns and df["year_of_entry"].notna().any():
-        df["year"] = pd.to_numeric(df["year_of_entry"], errors="coerce")
-    else:
-        # Fallback heuristic: if you only have year_of_fellowship (1 or 2),
-        # map to rough calendar years with assumption that current year is latest cohort year.
-        # Adjust base year as needed.
-        base_year = pd.Timestamp.today().year  # 2025 at time of writing
-        if "year_of_fellowship" not in df.columns:
-            return None
-        # Assume Year 2 => base_year, Year 1 => base_year (same calendar), but you can tweak:
-        df["year"] = base_year  # simplest; all current snapshot → one point
-        # If you track alumni in fellows, you’ll get multiple years; if not, this will be single-point.
-
-    grouped = []
-    for y, g in df.groupby("year"):
-        if pd.isna(y):
-            continue
-        fellows = int(g.shape[0])
-        provinces = int(g["province_of_origin"].nunique()) if "province_of_origin" in g.columns else np.nan
-        schools = int(g["school_assignment_id"].nunique()) if "school_assignment_id" in g.columns else np.nan
-        grouped.append({"year": int(y), "fellows": fellows, "provinces": provinces, "schools": schools})
-
-    if not grouped:
-        return None
-
-    out = pd.DataFrame(grouped).dropna(subset=["year"]).sort_values("year")
-    # De-dup/aggregate if multiple entries per year_of_entry exist
-    out = out.groupby("year", as_index=False).agg({"fellows": "sum", "provinces": "max", "schools": "max"})
-    return out
-
-
-# -------------------------------
-# UI Rendering
-# -------------------------------
-def render_program_scale_story(fellows_df: pd.DataFrame, learners_df: Optional[pd.DataFrame], historical_data: Optional[pd.DataFrame] = None):
-    st.markdown("## 📊 Program Scale & Reach")
-    st.caption("The fellowship journey: From pioneers to a national movement")
-
-    metrics = calculate_program_scale_metrics(fellows_df, learners_df)
-
-    # === ARC 1: SCALE & REACH ===
-    st.markdown("### 🎯 Current Active Cohort")
-    c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
-        st.metric("👥 Fellows", f"{metrics['total_fellows']:,}", help="Active fellows in the program")
-        if metrics.get("year_1_fellows") is not None and metrics.get("year_2_fellows") is not None:
-            st.caption(f"**{metrics['year_1_fellows']}** Year 1 • **{metrics['year_2_fellows']}** Year 2")
-
-    with c2:
-        st.metric("🏫 Schools", "-" if metrics["total_schools"] in (None, 0) else f"{metrics['total_schools']:,}",
-                  help="Schools with fellow placements")
-
-    with c3:
-        st.metric("🌍 Provinces", "-" if metrics["total_provinces"] in (None, 0) else f"{metrics['total_provinces']}",
-                  help="Provinces represented by fellows")
-
-    with c4:
-        learners_val = metrics["total_learners"]
-        st.metric("🎓 Learners", "-" if learners_val in (None, 0) else f"{learners_val:,}",
-                  help="Estimated learners reached (sum of class sizes)")
-
-    # === ARC 2: GROWTH JOURNEY ===
-    st.markdown("---")
-    st.markdown("### 📈 Growth Trajectory")
-    st.caption("Building a movement over time")
-
-    hist = historical_data
-    if hist is None or hist.empty:
-        hist = build_growth_from_fellows(fellows_df)
-
-    if hist is not None and not hist.empty:
-        cL, cR = st.columns([2, 1])
-        with cL:
-            if ALT_AVAILABLE:
-                upper = max(5, int(hist["fellows"].max() * 1.1))
-                chart = (
-                    alt.Chart(hist)
-                    .mark_line(point=True, strokeWidth=3)
-                    .encode(
-                        x=alt.X("year:O", title="Year", axis=alt.Axis(labelAngle=0)),
-                        y=alt.Y("fellows:Q", title="Number of Fellows", scale=alt.Scale(domain=[0, upper])),
-                        tooltip=[
-                            alt.Tooltip("year:O", title="Year"),
-                            alt.Tooltip("fellows:Q", title="Fellows"),
-                            alt.Tooltip("provinces:Q", title="Provinces"),
-                            alt.Tooltip("schools:Q", title="Schools"),
-                        ],
-                    )
-                    .properties(height=300)
+    # Loop over sections
+    for sheet_name, mv_list in sections.items():
+        # Create a sheet per section
+        startrow = 0
+        for mv in mv_list:
+            df = dfs.get(mv, pd.DataFrame())
+            if df is not None and not df.empty:
+                # Write section heading
+                df.to_excel(
+                    writer,
+                    sheet_name=sheet_name[:31],  # Excel limit 31 chars
+                    startrow=startrow,
+                    index=False,
                 )
-                st.altair_chart(chart, use_container_width=True)
-            else:
-                st.dataframe(hist, use_container_width=True)
-        with cR:
-            first_year = hist.iloc[0]
-            last_year = hist.iloc[-1]
-            growth = int(last_year["fellows"] - first_year["fellows"])
-            growth_pct = (growth / max(1, int(first_year["fellows"])) * 100.0)
-            st.metric("Fellows Growth", f"+{growth}", f"{growth_pct:.0f}% increase")
-            if "provinces" in hist.columns and pd.notna(first_year.get("provinces", np.nan)) and pd.notna(last_year.get("provinces", np.nan)):
-                st.metric(
-                    "Provincial Expansion",
-                    f"{int(first_year['provinces'])} → {int(last_year['provinces'])}",
-                    f"+{int(last_year['provinces'] - first_year['provinces'])} provinces"
-                )
-            st.info(
-                f"**{int(first_year['year'])}:** {int(first_year['fellows'])} fellows"
-                + (f" in {int(first_year['provinces'])} province(s)" if pd.notna(first_year.get('provinces', np.nan)) else "")
-                + f"\n\n**{int(last_year['year'])}:** {int(last_year['fellows'])} fellows"
-                + (f" across {int(last_year['provinces'])} provinces" if pd.notna(last_year.get('provinces', np.nan)) else "")
-            )
-    else:
-        st.info("💡 No historical series available yet. Add a `program_stats_yearly` table/view or ensure `year_of_entry` is populated in `fellows`.")
+                # Leave space before next table
+                startrow += len(df) + 3
 
-    # === ARC 3: DIVERSE & REPRESENTATIVE ===
-    st.markdown("---")
-    st.markdown("### 👥 Fellow Composition")
-    st.caption("Who our fellows are: Gender diversity and geographic reach")
-
-    # Split control
-    split_option = st.radio(
-        "View by:",
-        ["Combined (All Fellows)", "Year 1", "Year 2", "Year 1 vs Year 2 Comparison"],
-        horizontal=True,
-        key="composition_split",
-    )
-
-    df = fellows_df.copy()
-    if "status" in df.columns:
-        df = df[df["status"].str.lower() == "active"].copy()
-
-    if split_option == "Year 1":
-        display_df = df[df["year_of_fellowship"] == 1].copy() if "year_of_fellowship" in df.columns else df.iloc[0:0].copy()
-    elif split_option == "Year 2":
-        display_df = df[df["year_of_fellowship"] == 2].copy() if "year_of_fellowship" in df.columns else df.iloc[0:0].copy()
-    else:
-        display_df = df
-
-    c1, c2 = st.columns(2)
-
-    # Gender
-    with c1:
-        st.markdown("#### Gender Distribution")
-        if "gender" in display_df.columns and not display_df.empty:
-            if split_option == "Year 1 vs Year 2 Comparison" and "year_of_fellowship" in display_df.columns:
-                g = (
-                    display_df.groupby(["year_of_fellowship", "gender"])
-                    .size()
-                    .reset_index(name="count")
-                )
-                if ALT_AVAILABLE and not g.empty:
-                    chart = (
-                        alt.Chart(g)
-                        .mark_bar()
-                        .encode(
-                            x=alt.X("gender:N", title="Gender"),
-                            y=alt.Y("count:Q", title="Number of Fellows"),
-                            color=alt.Color("year_of_fellowship:N", title="Year", scale=alt.Scale(scheme="tableau10")),
-                            xOffset="year_of_fellowship:N",
-                            tooltip=["year_of_fellowship", "gender", "count"],
-                        )
-                        .properties(height=300)
-                    )
-                    st.altair_chart(chart, use_container_width=True)
-                else:
-                    st.dataframe(g, use_container_width=True)
-            else:
-                g = (
-                    display_df["gender"].value_counts(dropna=False)
-                    .rename_axis("gender")
-                    .reset_index(name="count")
-                )
-                g["percentage"] = (g["count"] / max(1, g["count"].sum()) * 100).round(1)
-                if ALT_AVAILABLE and not g.empty:
-                    chart = (
-                        alt.Chart(g)
-                        .mark_bar()
-                        .encode(
-                            x=alt.X("gender:N", title="Gender"),
-                            y=alt.Y("count:Q", title="Number of Fellows"),
-                            color=alt.Color("gender:N", legend=None),
-                            tooltip=["gender", "count", "percentage"],
-                        )
-                        .properties(height=300)
-                    )
-                    st.altair_chart(chart, use_container_width=True)
-                else:
-                    st.dataframe(g, use_container_width=True)
-
-                try:
-                    female_pct = float(g.loc[g["gender"] == "Female", "percentage"].values[0])
-                    st.caption(f"**{female_pct:.0f}%** of fellows are women")
-                except Exception:
-                    pass
-        else:
-            st.info("Gender data not available")
-
-    # Province
-    with c2:
-        st.markdown("#### Province of Origin")
-        if "province_of_origin" in display_df.columns and not display_df.empty:
-            if split_option == "Year 1 vs Year 2 Comparison" and "year_of_fellowship" in display_df.columns:
-                p = (
-                    display_df.groupby(["year_of_fellowship", "province_of_origin"])
-                    .size()
-                    .reset_index(name="count")
-                )
-                if ALT_AVAILABLE and not p.empty:
-                    chart = (
-                        alt.Chart(p)
-                        .mark_bar()
-                        .encode(
-                            y=alt.Y("province_of_origin:N", title="Province", sort="-x"),
-                            x=alt.X("count:Q", title="Number of Fellows"),
-                            color=alt.Color("year_of_fellowship:N", title="Year", scale=alt.Scale(scheme="tableau10")),
-                            yOffset="year_of_fellowship:N",
-                            tooltip=["year_of_fellowship", "province_of_origin", "count"],
-                        )
-                        .properties(height=300)
-                    )
-                    st.altair_chart(chart, use_container_width=True)
-                else:
-                    st.dataframe(p, use_container_width=True)
-            else:
-                p = (
-                    display_df["province_of_origin"].value_counts(dropna=False)
-                    .rename_axis("province")
-                    .reset_index(name="count")
-                )
-                if ALT_AVAILABLE and not p.empty:
-                    chart = (
-                        alt.Chart(p)
-                        .mark_bar()
-                        .encode(
-                            y=alt.Y("province:N", title="Province", sort="-x"),
-                            x=alt.X("count:Q", title="Number of Fellows"),
-                            color=alt.Color("province:N", legend=None),
-                            tooltip=["province", "count"],
-                        )
-                        .properties(height=300)
-                    )
-                    st.altair_chart(chart, use_container_width=True)
-                else:
-                    st.dataframe(p, use_container_width=True)
-
-                if not p.empty:
-                    top_row = p.iloc[0]
-                    st.caption(f"**{top_row['province']}** has the most fellows ({int(top_row['count'])})")
-        else:
-            st.info("Province data not available")
-
-    # Story summary
-    st.markdown("---")
-    t_f = metrics.get("total_fellows")
-    f_c = metrics.get("female_count")
-    t_l = metrics.get("total_learners")
-    t_s = metrics.get("total_schools")
-    if t_f:
-        if f_c is not None and t_f > 0:
-            female_pct = (f_c / t_f) * 100
-            learners_txt = f"{t_l:,}" if isinstance(t_l, int) and t_l > 0 else "—"
-            schools_txt = f"{t_s}" if isinstance(t_s, int) and t_s > 0 else "—"
-            st.success(
-                f"💡 **Fellowship Impact:** {t_f} diverse educators "
-                f"({female_pct:.0f}% women) reaching **{learners_txt}** learners across **{schools_txt}** schools."
-            )
-        else:
-            st.success(f"💡 **Fellowship Impact:** {t_f} diverse educators reaching learners across South Africa.")
-
-
-# -------------------------------
-# Page Entrypoint
-# -------------------------------
-def main():
-    st.set_page_config(page_title="Program Scale", page_icon="📊", layout="wide")
-    st.title("Program Scale Component")
-
-    available = _fetch_table_names()
-    if "fellows" not in available:
-        st.error("Table `fellows` is required for this component.")
-        st.stop()
-
-    fellows_df = load_fellows_df()
-    learners_df = load_learners_df()
-    yearly_df = load_program_stats_yearly()
-
-    if fellows_df.empty:
-        st.warning("No fellows found. Check your Supabase connection/filters.")
-        st.stop()
-
-    render_program_scale_story(fellows_df, learners_df, yearly_df)
-
-
-if __name__ == "__main__":
-    main()
+st.download_button(
+    "⬇️ Download Sectioned Report (Excel)",
+    data=excel_buffer.getvalue(),
+    file_name=f"classroom_observation_report_sections_{datetime.now().date()}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
