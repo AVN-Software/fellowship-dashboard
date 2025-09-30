@@ -15,6 +15,21 @@ import plotly.graph_objects as go
 from datetime import datetime
 import components.filters as fx
 
+# --- make repo root importable (so we can import utils.* from /pages) ---
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]  # repo root (one level up from /pages)
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+
+# --- import your DB manager ---
+try:
+    from utils.supabase.database_manager import DatabaseManager
+except Exception as e:
+    DatabaseManager = None
+    import streamlit as st
+    st.warning(f"DatabaseManager import failed ({e}). Will try local fallback for wellbeing data.")
 
 # =========================
 # Page Config

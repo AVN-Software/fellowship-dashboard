@@ -13,6 +13,10 @@ try:
 except Exception:
     ALT_AVAILABLE = False
 
+def render_full_data_table(df):
+    """Simple data explorer at the bottom."""
+    st.markdown("### 📋 Data Explorer")
+    st.dataframe(df, use_container_width=True)
 
 # ========================================
 # DATA PROCESSING FUNCTIONS
@@ -384,40 +388,97 @@ def render_phase_performance(df):
 def render_academic_results_section(df):
     """
     Main function to render the complete Academic Results section.
-    
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        Academic results data with columns:
-        - fellow_name, fellowship_year (or fellowship_year_display)
-        - subject, grade (or grade_display), phase_display
-        - class_size, term_1_avg, term_2_avg
+    df columns:
+      - fellow_name, fellowship_year (or fellowship_year_display)
+      - subject, grade (or grade_display), phase_display
+      - class_size, term_1_avg, term_2_avg
     """
-    
-    st.markdown("## 📊 Academic Results — 2025 Impact")
-    st.caption("Student performance and improvement across the fellowship")
-    
-    # Prepare data
+
+    # ---- Page title + subtitle
+    fx.topbar(
+        title="📊 Academic Results — 2025 Impact",
+        subtitle="Student performance and improvement across the fellowship"
+    )
+
+    # ---- Prepare / clean the incoming data
     df_clean = prepare_academic_data(df)
-    
-    # Calculate overall metrics
-    metrics = calculate_overall_metrics(df_clean)
-    
+
+    # ---- Options from data
+    subj_opts  = sorted(pd.Series(df_clean.get("subject", [])).dropna().unique().tolist())
+    phase_col  = "phase"  # prepared in prepare_academic_data
+    phase_opts = sorted(pd.Series(df_clean.get(phase_col, [])).dropna().unique().tolist())
+    grade_col  = "grade"  # prepared in prepare_academic_data
+    grade_raw  = pd.Series(df_clean.get(grade_col, [])).dropna().unique().tolist()
+
+    # robust numeric-ish sort for grades
+    def _grade_key(g):
+        try:
+            if isinstance(g, (int, float)): return int(g)
+            return int(str(g).split()[-1])
+        except Exception:
+            return 9999
+    grade_opts = sorted(grade_raw, key=_grade_key)
+
+    # ---- Top filter bar
+    with st.container():
+        st.markdown("### 🎛️ Filters")
+        c1, c2, c3, c4 = st.columns([1.6, 1.4, 1.4, 0.8])
+
+        flt_subjects = fx._multiselect(
+            "Subject",
+            options=subj_opts,
+            default=subj_opts,
+            key="acad_top_subjects",
+            target=c1,
+        )
+        flt_phases = fx._multiselect(
+            "Phase",
+            options=phase_opts,
+            default=phase_opts,
+            key="acad_top_phases",
+            target=c2,
+        )
+        flt_grades = fx._multiselect(
+            "Grade",
+            options=grade_opts,
+            default=grade_opts,
+            key="acad_top_grades",
+            target=c3,
+        )
+
+        if fx.reset_button("♻️ Reset", key="acad_top_reset", target=c4):
+            # wipe only this page's controls (leave global filters intact)
+            for k in list(st.session_state.keys()):
+                if k.startswith("acad_top_") or k.startswith("subject_year_split") or k.startswith("phase_year_split"):
+                    del st.session_state[k]
+            st.rerun()
+
+    # ---- Apply filters
+    filtered = df_clean.copy()
+    if flt_subjects:
+        filtered = filtered[filtered["subject"].isin(flt_subjects)]
+    if flt_phases:
+        filtered = filtered[filtered[phase_col].isin(flt_phases)]
+    if flt_grades:
+        filtered = filtered[filtered[grade_col].isin(flt_grades)]
+
+    # ---- (rest of the original function continues below, unchanged)
+    metrics = calculate_overall_metrics(filtered)
+
     # Render sections
     render_overall_kpis(metrics)
-    
-    st.markdown("---")
-    render_year_comparison_chart(df_clean)
-    
-    st.markdown("---")
-    render_subject_performance(df_clean)
-    
-    st.markdown("---")
-    render_phase_performance(df_clean)
-    
-    st.markdown("---")
-    render_full_data_table(df_clean)
 
+    st.markdown("---")
+    render_year_comparison_chart(filtered)
+
+    st.markdown("---")
+    render_subject_performance(filtered)
+
+    st.markdown("---")
+    render_phase_performance(filtered)
+
+    st.markdown("---")
+    render_full_data_table(filtered)
 
 # ========================================
 # TEST/DEMO
