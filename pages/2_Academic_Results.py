@@ -10,6 +10,16 @@ import plotly.express as px
 import plotly.graph_objects as go
 import components.filters as fx
 from datetime import datetime
+from pathlib import Path
+import sys
+
+# Add repo root to path
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+
+# Import database manager
+from utils.supabase.database_manager import DatabaseManager
 
 # ========================================
 # STYLING & CONSTANTS
@@ -27,6 +37,28 @@ COLORS = {
 }
 
 PASS_THRESHOLD = 50.0
+
+# ========================================
+# DATA LOADING
+# ========================================
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def load_academic_data():
+    """Fetch academic results using DatabaseManager."""
+    try:
+        db = DatabaseManager()
+        df = db.get_academic_results()
+        
+        if len(df) > 0:
+            st.success(f"✅ Loaded {len(df)} records from database")
+            return df
+        else:
+            st.warning("No data found in report_academic_results table.")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        st.error(f"❌ Error loading data: {e}")
+        return pd.DataFrame()
 
 # ========================================
 # DATA PROCESSING
@@ -91,14 +123,21 @@ def calculate_metrics(df):
 # MAIN RENDER FUNCTION
 # ========================================
 
-def render_academic_results_section(df):
-    """Main function with tabbed interface."""
+def render_academic_results_section():
+    """Main function with tabbed interface - loads its own data."""
     
     # Header
     fx.topbar(
         title="📊 Academic Results Dashboard",
         subtitle="Student performance and improvement across the fellowship"
     )
+    
+    # Load data from Supabase
+    df = load_academic_data()
+    
+    if len(df) == 0:
+        st.error("No data available. Please check your database connection and ensure report_academic_results table has data.")
+        return
     
     # Prepare data
     df_clean = prepare_academic_data(df)
@@ -227,35 +266,91 @@ def render_academic_results_section(df):
             # Distribution visualization
             st.markdown("### Term Comparison")
             
-            df_viz = filtered[filtered['class_size'] > 0].copy()
+            col1, col2 = st.columns([1, 1])
             
-            fig = go.Figure()
+            with col1:
+                # Bar chart showing average by term
+                df_viz = filtered[filtered['class_size'] > 0].copy()
+                
+                term_averages = pd.DataFrame([
+                    {
+                        'Term': 'Term 1',
+                        'Average': weighted_mean(df_viz['term_1_pct'], df_viz['class_size']),
+                        'Classes': len(df_viz)
+                    },
+                    {
+                        'Term': 'Term 2',
+                        'Average': weighted_mean(df_viz['term_2_pct'], df_viz['class_size']),
+                        'Classes': len(df_viz)
+                    }
+                ])
+                
+                fig_bar = go.Figure()
+                
+                fig_bar.add_trace(go.Bar(
+                    x=term_averages['Term'],
+                    y=term_averages['Average'],
+                    marker_color=[COLORS['term1'], COLORS['term2']],
+                    text=term_averages['Average'].apply(lambda x: f'{x:.1f}%'),
+                    textposition='outside',
+                    textfont=dict(size=14, weight='bold'),
+                    hovertemplate='<b>%{x}</b><br>Average: %{y:.1f}%<br>Classes: %{customdata}<extra></extra>',
+                    customdata=term_averages['Classes']
+                ))
+                
+                fig_bar.add_hline(
+                    y=PASS_THRESHOLD, 
+                    line_dash="dash", 
+                    line_color="gray",
+                    annotation_text=f"Pass Threshold ({PASS_THRESHOLD}%)",
+                    annotation_position="right"
+                )
+                
+                fig_bar.update_layout(
+                    title="Average Performance by Term",
+                    yaxis_title="Average Score (%)",
+                    xaxis_title="",
+                    height=450,
+                    yaxis_range=[0, 100],
+                    showlegend=False
+                )
+                
+                st.plotly_chart(fig_bar, use_container_width=True)
             
-            fig.add_trace(go.Box(
-                y=df_viz['term_1_pct'],
-                name='Term 1',
-                marker_color=COLORS['term1'],
-                boxmean='sd'
-            ))
-            
-            fig.add_trace(go.Box(
-                y=df_viz['term_2_pct'],
-                name='Term 2',
-                marker_color=COLORS['term2'],
-                boxmean='sd'
-            ))
-            
-            fig.add_hline(y=PASS_THRESHOLD, line_dash="dash", line_color="red", 
-                         annotation_text=f"Pass Threshold ({PASS_THRESHOLD}%)")
-            
-            fig.update_layout(
-                title="Performance Distribution by Term",
-                yaxis_title="Class Average (%)",
-                height=450,
-                showlegend=True
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
+            with col2:
+                # Box plot showing distribution
+                fig_box = go.Figure()
+                
+                fig_box.add_trace(go.Box(
+                    y=df_viz['term_1_pct'],
+                    name='Term 1',
+                    marker_color=COLORS['term1'],
+                    boxmean='sd'
+                ))
+                
+                fig_box.add_trace(go.Box(
+                    y=df_viz['term_2_pct'],
+                    name='Term 2',
+                    marker_color=COLORS['term2'],
+                    boxmean='sd'
+                ))
+                
+                fig_box.add_hline(
+                    y=PASS_THRESHOLD, 
+                    line_dash="dash", 
+                    line_color="red",
+                    annotation_text=f"Pass ({PASS_THRESHOLD}%)",
+                    annotation_position="right"
+                )
+                
+                fig_box.update_layout(
+                    title="Distribution by Term",
+                    yaxis_title="Class Average (%)",
+                    height=450,
+                    showlegend=True
+                )
+                
+                st.plotly_chart(fig_box, use_container_width=True)
             
             # Impact summary
             if not pd.isna(metrics['improvement']):
@@ -570,20 +665,9 @@ def render_academic_results_section(df):
 
 
 # ========================================
-# TEST
+# MAIN ENTRY POINT
 # ========================================
 
-def test_academic_results():
-    st.title("Academic Results - Tabbed Interface")
-    
-    sample = pd.DataFrame([
-        {"fellow_name": "Mamsie C", "fellowship_year": 2, "subject": "Life Skills", "grade": 3, "phase_display": "Foundation Phase", "class_size": 56, "term_1_avg": 0.89, "term_2_avg": 0.90},
-        {"fellow_name": "Carmen B", "fellowship_year": 1, "subject": "Life Skills", "grade": 1, "phase_display": "Foundation Phase", "class_size": 16, "term_1_avg": 0.80, "term_2_avg": 0.91},
-        {"fellow_name": "Lailaa K", "fellowship_year": 1, "subject": "History", "grade": 4, "phase_display": "Intermediate Phase", "class_size": 25, "term_1_avg": 0.88, "term_2_avg": 0.87},
-    ] * 20)
-    
-    render_academic_results_section(sample)
-
-
 if __name__ == "__main__":
-    test_academic_results()
+    st.set_page_config(page_title="Academic Results", page_icon="📊", layout="wide")
+    render_academic_results_section()  # Loads data automatically from Supabase

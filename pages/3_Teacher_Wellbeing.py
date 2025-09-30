@@ -206,8 +206,7 @@ if filters["facilitators"]:
 # =========================
 # Main Content
 # =========================
-st.title("🌱 Fellow Wellbeing Survey — Term Focus")
-st.markdown("**Tracking holistic wellbeing per term (overall first), with progression by Phase and Year of Fellowship.**")
+
 st.caption("Scoring: 1=Struggling, 2=Coping, 3=Confident • 63 indicators")
 st.divider()
 
