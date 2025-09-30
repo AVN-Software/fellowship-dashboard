@@ -1,0 +1,27 @@
+{
+  "table": "academic_results",
+  "columns": [
+    {
+      "name": "fellowship_year",
+      "display": "Fellowship Year",
+      "type": "string",
+      "filter": true
+    },
+    {
+      "name": "fellow_name",
+      "display": "Fellow Name",
+      "type": "string",
+      "filter": true
+    },
+    {
+      "name": "subject",
+      "display": "Subject",
+      "type": "string",
+      "filter": true
+    },
+    { "name": "phase", "display": "Phase", "type": "string", "filter": true },
+    { "name": "grade", "display": "Grade", "type": "string", "filter": true },
+    { "name": "term_1", "display": "Term 1", "type": "float", "filter": false },
+    { "name": "term_2", "display": "Term 2", "type": "float", "filter": false }
+  ]
+}
