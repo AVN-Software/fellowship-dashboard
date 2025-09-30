@@ -1,57 +1,53 @@
 """
-Academic Results Section - Complete with Table and Graphs
-Focuses on academic performance analysis with interactive visualizations
+Academic Results Dashboard - Tabbed Interface
+Modern design with organized tabs for different analysis views
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-
-try:
-    import altair as alt
-    ALT_AVAILABLE = True
-except Exception:
-    ALT_AVAILABLE = False
-
-def render_full_data_table(df):
-    """Simple data explorer at the bottom."""
-    st.markdown("### 📋 Data Explorer")
-    st.dataframe(df, use_container_width=True)
+import plotly.express as px
+import plotly.graph_objects as go
+import components.filters as fx
+from datetime import datetime
 
 # ========================================
-# DATA PROCESSING FUNCTIONS
+# STYLING & CONSTANTS
+# ========================================
+
+COLORS = {
+    "primary": "#2E86AB",
+    "secondary": "#A23B72",
+    "success": "#06A77D",
+    "warning": "#F18F01",
+    "danger": "#C73E1D",
+    "term1": "#4A90E2",
+    "term2": "#50C878",
+    "gradient": ["#C73E1D", "#F18F01", "#FDB462", "#06A77D", "#2E86AB"],
+}
+
+PASS_THRESHOLD = 50.0
+
+# ========================================
+# DATA PROCESSING
 # ========================================
 
 def prepare_academic_data(df):
-    """
-    Clean and prepare academic results data.
-    
-    Parameters:
-    -----------
-    df : pd.DataFrame with columns:
-        - fellow_name, fellowship_year, subject, grade, phase_display
-        - class_size, term_1_avg, term_2_avg
-    """
+    """Clean and prepare academic results data."""
     df = df.copy()
     
-    # Ensure numeric types
     df['term_1_avg'] = pd.to_numeric(df['term_1_avg'], errors='coerce')
     df['term_2_avg'] = pd.to_numeric(df['term_2_avg'], errors='coerce')
     df['class_size'] = pd.to_numeric(df['class_size'], errors='coerce').fillna(0).astype(int)
     
-    # Convert to percentages (assuming 0-1 scale)
     df['term_1_pct'] = df['term_1_avg'] * 100
     df['term_2_pct'] = df['term_2_avg'] * 100
-    
-    # Calculate improvement
     df['improvement'] = df['term_2_avg'] - df['term_1_avg']
     df['improvement_pct'] = df['improvement'] * 100
     
-    # Calculate pass/fail (threshold: 50% = 0.50)
-    df['pass_term_1'] = df['term_1_avg'] >= 0.50
-    df['pass_term_2'] = df['term_2_avg'] >= 0.50
+    df['pass_term_1'] = df['term_1_pct'] >= PASS_THRESHOLD
+    df['pass_term_2'] = df['term_2_pct'] >= PASS_THRESHOLD
     
-    # Clean display fields
     if 'fellowship_year_display' in df.columns:
         df['year_display'] = df['fellowship_year_display']
     elif 'fellowship_year' in df.columns:
@@ -66,7 +62,7 @@ def prepare_academic_data(df):
 
 
 def weighted_mean(values, weights):
-    """Calculate weighted mean, handling NaN and zero weights."""
+    """Calculate weighted mean."""
     v = pd.to_numeric(values, errors='coerce')
     w = pd.to_numeric(weights, errors='coerce').fillna(0)
     total_weight = w.sum()
@@ -75,431 +71,518 @@ def weighted_mean(values, weights):
     return np.nan
 
 
-def calculate_overall_metrics(df):
-    """Calculate overall academic metrics."""
+def calculate_metrics(df):
+    """Calculate key metrics."""
     df_clean = df[df['class_size'] > 0].copy()
     
-    metrics = {
+    return {
         'total_classes': len(df),
         'total_learners': int(df['class_size'].sum()),
+        'total_fellows': df['fellow_name'].nunique() if 'fellow_name' in df else 0,
         'term_1_avg': weighted_mean(df_clean['term_1_avg'], df_clean['class_size']),
         'term_2_avg': weighted_mean(df_clean['term_2_avg'], df_clean['class_size']),
         'pass_count_t1': int(df['pass_term_1'].sum()),
         'pass_count_t2': int(df['pass_term_2'].sum()),
-        'pass_rate_t1': df['pass_term_1'].sum() / len(df) if len(df) > 0 else 0,
-        'pass_rate_t2': df['pass_term_2'].sum() / len(df) if len(df) > 0 else 0,
+        'improvement': weighted_mean(df_clean['improvement'], df_clean['class_size']),
     }
-    
-    metrics['improvement'] = metrics['term_2_avg'] - metrics['term_1_avg'] if not pd.isna(metrics['term_2_avg']) else np.nan
-    metrics['pass_improvement'] = metrics['pass_count_t2'] - metrics['pass_count_t1']
-    
-    return metrics
 
 
 # ========================================
-# VISUALIZATION COMPONENTS
-# ========================================
-
-def render_overall_kpis(metrics):
-    """Render overall KPI cards."""
-    st.markdown("### 🎯 Overall Impact")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric(
-            "Term 1 Average",
-            f"{metrics['term_1_avg']*100:.1f}%" if not pd.isna(metrics['term_1_avg']) else "-",
-            help="Baseline performance (weighted by class size)"
-        )
-    
-    with col2:
-        improvement_val = metrics['improvement'] * 100 if not pd.isna(metrics['improvement']) else 0
-        st.metric(
-            "Term 2 Average",
-            f"{metrics['term_2_avg']*100:.1f}%" if not pd.isna(metrics['term_2_avg']) else "-",
-            delta=f"{improvement_val:+.1f}pp",
-            help="End of term performance (weighted by class size)"
-        )
-    
-    with col3:
-        st.metric(
-            "Classes Passing (T2)",
-            f"{metrics['pass_count_t2']}/{metrics['total_classes']}",
-            delta=f"{metrics['pass_improvement']:+d} classes",
-            help="Number of classes achieving ≥50% average"
-        )
-    
-    with col4:
-        st.metric(
-            "Pass Rate",
-            f"{metrics['pass_rate_t2']*100:.1f}%",
-            delta=f"{(metrics['pass_rate_t2']-metrics['pass_rate_t1'])*100:+.1f}pp",
-            help="Percentage of classes passing"
-        )
-    
-    # Summary insight
-    if not pd.isna(metrics['improvement']):
-        st.info(f"📊 **Impact Summary:** Across **{metrics['total_classes']} classes** reaching **{metrics['total_learners']:,} learners**, average performance improved by **{improvement_val:+.1f} percentage points**, with **{metrics['pass_improvement']:+d} additional classes** achieving passing grades.")
-
-
-def render_year_comparison_chart(df):
-    """Render Year 1 vs Year 2 comparison."""
-    st.markdown("### 🥇 Year 1 vs Year 2 Comparison")
-    st.caption("Does experience matter? Comparing performance by fellowship year")
-    
-    # Aggregate by year
-    df_clean = df[df['class_size'] > 0].copy()
-    
-    year_comparison = df_clean.groupby('year_display').apply(
-        lambda g: pd.Series({
-            'Term 1': weighted_mean(g['term_1_avg'], g['class_size']) * 100,
-            'Term 2': weighted_mean(g['term_2_avg'], g['class_size']) * 100,
-            'Improvement': (weighted_mean(g['term_2_avg'], g['class_size']) - weighted_mean(g['term_1_avg'], g['class_size'])) * 100,
-            'Classes': len(g),
-            'Learners': int(g['class_size'].sum()),
-            'Pass Rate': g['pass_term_2'].sum() / len(g) * 100
-        })
-    ).reset_index()
-    
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        if ALT_AVAILABLE and not year_comparison.empty:
-            # Melt for grouped bar chart
-            melted = year_comparison.melt(
-                id_vars=['year_display', 'Classes', 'Learners', 'Pass Rate'],
-                value_vars=['Term 1', 'Term 2'],
-                var_name='Term',
-                value_name='Average Score'
-            )
-            
-            chart = (
-                alt.Chart(melted)
-                .mark_bar(size=40)
-                .encode(
-                    x=alt.X('year_display:N', title='Fellowship Year', axis=alt.Axis(labelAngle=0)),
-                    y=alt.Y('Average Score:Q', title='Average Score (%)', scale=alt.Scale(domain=[0, 100])),
-                    color=alt.Color('Term:N', scale=alt.Scale(scheme='tableau10')),
-                    xOffset='Term:N',
-                    tooltip=[
-                        alt.Tooltip('year_display', title='Year'),
-                        alt.Tooltip('Term', title='Term'),
-                        alt.Tooltip('Average Score', title='Score', format='.1f'),
-                        alt.Tooltip('Classes', title='Classes'),
-                        alt.Tooltip('Learners', title='Learners', format=',')
-                    ]
-                )
-                .properties(height=350)
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.dataframe(year_comparison, use_container_width=True)
-    
-    with col2:
-        # Calculate delta
-        if len(year_comparison) >= 2:
-            y1_data = year_comparison[year_comparison['year_display'].str.contains('Year 1', na=False)]
-            y2_data = year_comparison[year_comparison['year_display'].str.contains('Year 2', na=False)]
-            
-            if not y1_data.empty and not y2_data.empty:
-                y1_t2 = y1_data.iloc[0]['Term 2']
-                y2_t2 = y2_data.iloc[0]['Term 2']
-                delta = y2_t2 - y1_t2
-                
-                st.metric(
-                    "Year 2 vs Year 1",
-                    f"{delta:+.1f}pp",
-                    help="Difference in Term 2 performance"
-                )
-                
-                if delta > 0:
-                    st.success(f"✅ Year 2 fellows outperform Year 1 by {delta:.1f} percentage points")
-                elif delta < 0:
-                    st.warning(f"⚠️ Year 1 performing {abs(delta):.1f}pp better")
-                else:
-                    st.info("➡️ Both years performing equally")
-
-
-def render_subject_performance(df):
-    """Render performance by subject."""
-    st.markdown("### 📚 Performance by Subject")
-    st.caption("Which subjects show the strongest improvement?")
-    
-    # Toggle for year split
-    split_by_year = st.checkbox("Split by Fellowship Year", key="subject_year_split")
-    
-    df_clean = df[df['class_size'] > 0].copy()
-    
-    if split_by_year:
-        # Group by subject and year
-        subject_perf = df_clean.groupby(['subject', 'year_display']).apply(
-            lambda g: pd.Series({
-                'Term 1': weighted_mean(g['term_1_avg'], g['class_size']) * 100,
-                'Term 2': weighted_mean(g['term_2_avg'], g['class_size']) * 100,
-                'Improvement': (weighted_mean(g['term_2_avg'], g['class_size']) - weighted_mean(g['term_1_avg'], g['class_size'])) * 100,
-                'Classes': len(g),
-            })
-        ).reset_index()
-        
-        if ALT_AVAILABLE and not subject_perf.empty:
-            chart = (
-                alt.Chart(subject_perf)
-                .mark_bar()
-                .encode(
-                    x=alt.X('subject:N', title='Subject', axis=alt.Axis(labelAngle=-45)),
-                    y=alt.Y('Term 2:Q', title='Term 2 Average (%)'),
-                    color=alt.Color('year_display:N', title='Fellowship Year'),
-                    xOffset='year_display:N',
-                    tooltip=['subject', 'year_display', alt.Tooltip('Term 2', format='.1f'), 'Classes']
-                )
-                .properties(height=400)
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.dataframe(subject_perf, use_container_width=True)
-    else:
-        # Group by subject only
-        subject_perf = df_clean.groupby('subject').apply(
-            lambda g: pd.Series({
-                'Term 1': weighted_mean(g['term_1_avg'], g['class_size']) * 100,
-                'Term 2': weighted_mean(g['term_2_avg'], g['class_size']) * 100,
-                'Improvement': (weighted_mean(g['term_2_avg'], g['class_size']) - weighted_mean(g['term_1_avg'], g['class_size'])) * 100,
-                'Classes': len(g),
-                'Learners': int(g['class_size'].sum()),
-            })
-        ).reset_index().sort_values('Improvement', ascending=False)
-        
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            if ALT_AVAILABLE and not subject_perf.empty:
-                # Melted for grouped bars
-                melted = subject_perf.melt(
-                    id_vars=['subject', 'Classes', 'Learners'],
-                    value_vars=['Term 1', 'Term 2'],
-                    var_name='Term',
-                    value_name='Score'
-                )
-                
-                chart = (
-                    alt.Chart(melted)
-                    .mark_bar()
-                    .encode(
-                        x=alt.X('subject:N', title='Subject', axis=alt.Axis(labelAngle=-45)),
-                        y=alt.Y('Score:Q', title='Average Score (%)'),
-                        color=alt.Color('Term:N', scale=alt.Scale(scheme='category10')),
-                        xOffset='Term:N',
-                        tooltip=['subject', 'Term', alt.Tooltip('Score', format='.1f'), 'Classes']
-                    )
-                    .properties(height=400)
-                )
-                st.altair_chart(chart, use_container_width=True)
-            else:
-                st.dataframe(subject_perf, use_container_width=True)
-        
-        with col2:
-            st.markdown("#### Top Performers")
-            top_3 = subject_perf.nlargest(3, 'Term 2')
-            for idx, row in top_3.iterrows():
-                st.metric(
-                    row['subject'],
-                    f"{row['Term 2']:.1f}%",
-                    delta=f"{row['Improvement']:+.1f}pp"
-                )
-
-
-def render_phase_performance(df):
-    """Render performance by education phase."""
-    st.markdown("### 🎯 Performance by Education Phase")
-    st.caption("Foundation → Intermediate → Senior → FET")
-    
-    split_by_year = st.checkbox("Split by Fellowship Year", key="phase_year_split")
-    
-    df_clean = df[df['class_size'] > 0].copy()
-    
-    # Define phase order
-    phase_order = ['Foundation Phase', 'Intermediate Phase', 'Senior Phase', 'FET Phase']
-    
-    if split_by_year:
-        phase_perf = df_clean.groupby(['phase', 'year_display']).apply(
-            lambda g: pd.Series({
-                'Term 2': weighted_mean(g['term_2_avg'], g['class_size']) * 100,
-                'Improvement': (weighted_mean(g['term_2_avg'], g['class_size']) - weighted_mean(g['term_1_avg'], g['class_size'])) * 100,
-                'Classes': len(g),
-            })
-        ).reset_index()
-        
-        if ALT_AVAILABLE:
-            chart = (
-                alt.Chart(phase_perf)
-                .mark_bar()
-                .encode(
-                    x=alt.X('phase:N', title='Education Phase', sort=phase_order),
-                    y=alt.Y('Term 2:Q', title='Term 2 Average (%)'),
-                    color=alt.Color('year_display:N', title='Fellowship Year'),
-                    xOffset='year_display:N',
-                    tooltip=['phase', 'year_display', alt.Tooltip('Term 2', format='.1f'), 'Classes']
-                )
-                .properties(height=350)
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.dataframe(phase_perf)
-    else:
-        phase_perf = df_clean.groupby('phase').apply(
-            lambda g: pd.Series({
-                'Term 1': weighted_mean(g['term_1_avg'], g['class_size']) * 100,
-                'Term 2': weighted_mean(g['term_2_avg'], g['class_size']) * 100,
-                'Improvement': (weighted_mean(g['term_2_avg'], g['class_size']) - weighted_mean(g['term_1_avg'], g['class_size'])) * 100,
-                'Classes': len(g),
-                'Learners': int(g['class_size'].sum()),
-            })
-        ).reset_index()
-        
-        # Sort by phase order
-        phase_perf['phase'] = pd.Categorical(phase_perf['phase'], categories=phase_order, ordered=True)
-        phase_perf = phase_perf.sort_values('phase')
-        
-        if ALT_AVAILABLE:
-            chart = (
-                alt.Chart(phase_perf)
-                .mark_bar(size=60)
-                .encode(
-                    x=alt.X('phase:N', title='Education Phase', sort=phase_order),
-                    y=alt.Y('Improvement:Q', title='Improvement (pp)'),
-                    color=alt.condition(
-                        alt.datum.Improvement > 0,
-                        alt.value('#2ecc71'),
-                        alt.value('#e74c3c')
-                    ),
-                    tooltip=['phase', alt.Tooltip('Term 1', format='.1f'), alt.Tooltip('Term 2', format='.1f'), alt.Tooltip('Improvement', format='.1f'), 'Classes']
-                )
-                .properties(height=350)
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.dataframe(phase_perf)
-
-# ========================================
-# MAIN SECTION RENDERER
+# MAIN RENDER FUNCTION
 # ========================================
 
 def render_academic_results_section(df):
-    """
-    Main function to render the complete Academic Results section.
-    df columns:
-      - fellow_name, fellowship_year (or fellowship_year_display)
-      - subject, grade (or grade_display), phase_display
-      - class_size, term_1_avg, term_2_avg
-    """
-
-    # ---- Page title + subtitle
+    """Main function with tabbed interface."""
+    
+    # Header
     fx.topbar(
-        title="📊 Academic Results — 2025 Impact",
+        title="📊 Academic Results Dashboard",
         subtitle="Student performance and improvement across the fellowship"
     )
-
-    # ---- Prepare / clean the incoming data
+    
+    # Prepare data
     df_clean = prepare_academic_data(df)
-
-    # ---- Options from data
-    subj_opts  = sorted(pd.Series(df_clean.get("subject", [])).dropna().unique().tolist())
-    phase_col  = "phase"  # prepared in prepare_academic_data
-    phase_opts = sorted(pd.Series(df_clean.get(phase_col, [])).dropna().unique().tolist())
-    grade_col  = "grade"  # prepared in prepare_academic_data
-    grade_raw  = pd.Series(df_clean.get(grade_col, [])).dropna().unique().tolist()
-
-    # robust numeric-ish sort for grades
-    def _grade_key(g):
+    
+    # Filter options
+    subj_opts = sorted(df_clean['subject'].dropna().unique())
+    phase_opts = sorted(df_clean['phase'].dropna().unique())
+    
+    def grade_key(g):
         try:
             if isinstance(g, (int, float)): return int(g)
             return int(str(g).split()[-1])
-        except Exception:
+        except:
             return 9999
-    grade_opts = sorted(grade_raw, key=_grade_key)
-
-    # ---- Top filter bar
-    with st.container():
-        st.markdown("### 🎛️ Filters")
-        c1, c2, c3, c4 = st.columns([1.6, 1.4, 1.4, 0.8])
-
-        flt_subjects = fx._multiselect(
-            "Subject",
-            options=subj_opts,
-            default=subj_opts,
-            key="acad_top_subjects",
-            target=c1,
-        )
-        flt_phases = fx._multiselect(
-            "Phase",
-            options=phase_opts,
-            default=phase_opts,
-            key="acad_top_phases",
-            target=c2,
-        )
-        flt_grades = fx._multiselect(
-            "Grade",
-            options=grade_opts,
-            default=grade_opts,
-            key="acad_top_grades",
-            target=c3,
-        )
-
-        if fx.reset_button("♻️ Reset", key="acad_top_reset", target=c4):
-            # wipe only this page's controls (leave global filters intact)
-            for k in list(st.session_state.keys()):
-                if k.startswith("acad_top_") or k.startswith("subject_year_split") or k.startswith("phase_year_split"):
-                    del st.session_state[k]
-            st.rerun()
-
-    # ---- Apply filters
+    
+    grade_opts = sorted(df_clean['grade'].dropna().unique(), key=grade_key)
+    
+    # Top filters
+    st.markdown("### 🎛️ Filters")
+    c1, c2, c3, c4 = st.columns([1.6, 1.4, 1.4, 0.8])
+    
+    flt_subjects = fx._multiselect("Subject", subj_opts, subj_opts, "acad_subj", c1)
+    flt_phases = fx._multiselect("Phase", phase_opts, phase_opts, "acad_phase", c2)
+    flt_grades = fx._multiselect("Grade", grade_opts, grade_opts, "acad_grade", c3)
+    
+    if fx.reset_button("♻️ Reset", key="acad_reset", target=c4):
+        for k in list(st.session_state.keys()):
+            if k.startswith("acad_"):
+                del st.session_state[k]
+        st.rerun()
+    
+    # Apply filters
     filtered = df_clean.copy()
     if flt_subjects:
-        filtered = filtered[filtered["subject"].isin(flt_subjects)]
+        filtered = filtered[filtered['subject'].isin(flt_subjects)]
     if flt_phases:
-        filtered = filtered[filtered[phase_col].isin(flt_phases)]
+        filtered = filtered[filtered['phase'].isin(flt_phases)]
     if flt_grades:
-        filtered = filtered[filtered[grade_col].isin(flt_grades)]
+        filtered = filtered[filtered['grade'].isin(flt_grades)]
+    
+    st.divider()
+    
+    # ========================================
+    # TABS
+    # ========================================
+    
+    tab_overview, tab_subjects, tab_years, tab_phases, tab_data = st.tabs([
+        "📌 Overview",
+        "📚 Subjects", 
+        "🥇 Fellowship Years",
+        "🎯 Education Phases",
+        "📋 Data"
+    ])
+    
+    # -------------------------
+    # OVERVIEW TAB
+    # -------------------------
+    with tab_overview:
+        if len(filtered) == 0:
+            st.warning("No data available for selected filters.")
+        else:
+            metrics = calculate_metrics(filtered)
+            
+            st.subheader("Program Impact Overview")
+            
+            # Top metrics row
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    "Total Learners",
+                    f"{metrics['total_learners']:,}",
+                    help="Students across all classes"
+                )
+            
+            with col2:
+                st.metric(
+                    "Classes",
+                    f"{metrics['total_classes']}",
+                    help="Classes tracked"
+                )
+            
+            with col3:
+                st.metric(
+                    "Fellows",
+                    f"{metrics['total_fellows']}",
+                    help="Fellows contributing data"
+                )
+            
+            with col4:
+                pass_improvement = metrics['pass_count_t2'] - metrics['pass_count_t1']
+                st.metric(
+                    "Classes Passing",
+                    f"{metrics['pass_count_t2']}",
+                    delta=f"{pass_improvement:+d}",
+                    help=f"Classes ≥{PASS_THRESHOLD}%"
+                )
+            
+            # Performance metrics
+            st.markdown("### Performance Metrics")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if not pd.isna(metrics['term_1_avg']):
+                    st.metric(
+                        "Term 1 Baseline",
+                        f"{metrics['term_1_avg']*100:.1f}%"
+                    )
+            
+            with col2:
+                if not pd.isna(metrics['term_2_avg']):
+                    improvement_val = (metrics['term_2_avg'] - metrics['term_1_avg']) * 100
+                    st.metric(
+                        "Term 2 Performance",
+                        f"{metrics['term_2_avg']*100:.1f}%",
+                        delta=f"{improvement_val:+.1f}pp"
+                    )
+            
+            with col3:
+                if not pd.isna(metrics['improvement']):
+                    st.metric(
+                        "Average Improvement",
+                        f"{metrics['improvement']*100:+.1f}pp"
+                    )
+            
+            # Distribution visualization
+            st.markdown("### Term Comparison")
+            
+            df_viz = filtered[filtered['class_size'] > 0].copy()
+            
+            fig = go.Figure()
+            
+            fig.add_trace(go.Box(
+                y=df_viz['term_1_pct'],
+                name='Term 1',
+                marker_color=COLORS['term1'],
+                boxmean='sd'
+            ))
+            
+            fig.add_trace(go.Box(
+                y=df_viz['term_2_pct'],
+                name='Term 2',
+                marker_color=COLORS['term2'],
+                boxmean='sd'
+            ))
+            
+            fig.add_hline(y=PASS_THRESHOLD, line_dash="dash", line_color="red", 
+                         annotation_text=f"Pass Threshold ({PASS_THRESHOLD}%)")
+            
+            fig.update_layout(
+                title="Performance Distribution by Term",
+                yaxis_title="Class Average (%)",
+                height=450,
+                showlegend=True
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Impact summary
+            if not pd.isna(metrics['improvement']):
+                improvement_pct = metrics['improvement'] * 100
+                if improvement_pct > 0:
+                    st.success(
+                        f"✅ **Positive Impact:** Across **{metrics['total_classes']} classes** reaching "
+                        f"**{metrics['total_learners']:,} learners**, performance improved by "
+                        f"**{improvement_pct:+.1f}pp**, with **{pass_improvement:+d} additional classes** passing."
+                    )
+                else:
+                    st.warning(f"⚠️ Performance declined by {abs(improvement_pct):.1f}pp.")
+    
+    # -------------------------
+    # SUBJECTS TAB
+    # -------------------------
+    with tab_subjects:
+        if len(filtered) == 0:
+            st.warning("No data available.")
+        else:
+            st.subheader("Subject Performance Analysis")
+            
+            df_subj = filtered[filtered['class_size'] > 0].copy()
+            
+            subject_stats = df_subj.groupby('subject').apply(
+                lambda g: pd.Series({
+                    'Term 1': weighted_mean(g['term_1_pct'], g['class_size']),
+                    'Term 2': weighted_mean(g['term_2_pct'], g['class_size']),
+                    'Improvement': weighted_mean(g['improvement_pct'], g['class_size']),
+                    'Classes': len(g),
+                    'Learners': int(g['class_size'].sum()),
+                })
+            ).reset_index().sort_values('Improvement', ascending=True)
+            
+            # Horizontal bar chart
+            fig = go.Figure()
+            
+            colors = [COLORS['success'] if x > 0 else COLORS['danger'] 
+                     for x in subject_stats['Improvement']]
+            
+            fig.add_trace(go.Bar(
+                y=subject_stats['subject'],
+                x=subject_stats['Improvement'],
+                orientation='h',
+                marker_color=colors,
+                text=subject_stats['Improvement'].apply(lambda x: f'{x:+.1f}pp'),
+                textposition='outside'
+            ))
+            
+            fig.update_layout(
+                title="Subject Improvement (Term 1 → Term 2)",
+                xaxis_title="Improvement (percentage points)",
+                height=max(450, len(subject_stats) * 35),
+                showlegend=False
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Top performers
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 🏆 Highest Performing")
+                top_3 = subject_stats.nlargest(3, 'Term 2')
+                for _, row in top_3.iterrows():
+                    st.metric(
+                        row['subject'],
+                        f"{row['Term 2']:.1f}%",
+                        delta=f"{row['Improvement']:+.1f}pp"
+                    )
+            
+            with col2:
+                st.markdown("#### 📈 Most Improved")
+                top_growth = subject_stats.nlargest(3, 'Improvement')
+                for _, row in top_growth.iterrows():
+                    st.metric(
+                        row['subject'],
+                        f"{row['Improvement']:+.1f}pp",
+                        help=f"{row['Term 1']:.1f}% → {row['Term 2']:.1f}%"
+                    )
+    
+    # -------------------------
+    # FELLOWSHIP YEARS TAB
+    # -------------------------
+    with tab_years:
+        if len(filtered) == 0:
+            st.warning("No data available.")
+        else:
+            st.subheader("Fellowship Year Comparison")
+            st.caption("Does experience matter? Year 1 vs Year 2")
+            
+            df_year = filtered[filtered['class_size'] > 0].copy()
+            
+            year_stats = df_year.groupby('year_display').apply(
+                lambda g: pd.Series({
+                    'Term 1': weighted_mean(g['term_1_pct'], g['class_size']),
+                    'Term 2': weighted_mean(g['term_2_pct'], g['class_size']),
+                    'Improvement': weighted_mean(g['improvement_pct'], g['class_size']),
+                    'Classes': len(g),
+                    'Learners': int(g['class_size'].sum()),
+                })
+            ).reset_index()
+            
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                fig = go.Figure()
+                
+                fig.add_trace(go.Bar(
+                    name='Term 1',
+                    x=year_stats['year_display'],
+                    y=year_stats['Term 1'],
+                    marker_color=COLORS['term1'],
+                    text=year_stats['Term 1'].apply(lambda x: f'{x:.1f}%'),
+                    textposition='outside'
+                ))
+                
+                fig.add_trace(go.Bar(
+                    name='Term 2',
+                    x=year_stats['year_display'],
+                    y=year_stats['Term 2'],
+                    marker_color=COLORS['term2'],
+                    text=year_stats['Term 2'].apply(lambda x: f'{x:.1f}%'),
+                    textposition='outside'
+                ))
+                
+                fig.add_hline(y=PASS_THRESHOLD, line_dash="dash", line_color="gray", opacity=0.5)
+                
+                fig.update_layout(
+                    title="Performance by Fellowship Year",
+                    yaxis_title="Average Score (%)",
+                    yaxis_range=[0, 105],
+                    barmode='group',
+                    height=450
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                st.markdown("**Comparison**")
+                
+                if len(year_stats) >= 2:
+                    y1 = year_stats[year_stats['year_display'].str.contains('Year 1', na=False)]
+                    y2 = year_stats[year_stats['year_display'].str.contains('Year 2', na=False)]
+                    
+                    if not y1.empty and not y2.empty:
+                        delta_t2 = y2.iloc[0]['Term 2'] - y1.iloc[0]['Term 2']
+                        delta_imp = y2.iloc[0]['Improvement'] - y1.iloc[0]['Improvement']
+                        
+                        st.metric("Year 2 Advantage", f"{delta_t2:+.1f}pp")
+                        st.metric("Growth Difference", f"{delta_imp:+.1f}pp")
+                        
+                        if delta_t2 > 2:
+                            st.success(f"Year 2 ahead by {delta_t2:.1f}pp")
+                        elif delta_t2 < -2:
+                            st.info(f"Year 1 ahead by {abs(delta_t2):.1f}pp")
+                        else:
+                            st.info("Similar performance")
+            
+            # Data table
+            st.markdown("### Detailed Stats")
+            st.dataframe(
+                year_stats.style.format({
+                    'Term 1': '{:.1f}%',
+                    'Term 2': '{:.1f}%',
+                    'Improvement': '{:+.1f}pp'
+                }),
+                use_container_width=True,
+                hide_index=True
+            )
+    
+    # -------------------------
+    # PHASES TAB
+    # -------------------------
+    with tab_phases:
+        if len(filtered) == 0:
+            st.warning("No data available.")
+        else:
+            st.subheader("Education Phase Performance")
+            
+            df_phase = filtered[filtered['class_size'] > 0].copy()
+            
+            phase_order = ['Foundation Phase', 'Intermediate Phase', 'Senior Phase', 'FET Phase']
+            
+            phase_stats = df_phase.groupby('phase').apply(
+                lambda g: pd.Series({
+                    'Term 1': weighted_mean(g['term_1_pct'], g['class_size']),
+                    'Term 2': weighted_mean(g['term_2_pct'], g['class_size']),
+                    'Improvement': weighted_mean(g['improvement_pct'], g['class_size']),
+                    'Classes': len(g),
+                    'Pass Rate': (g['pass_term_2'].sum() / len(g) * 100) if len(g) > 0 else 0
+                })
+            ).reset_index()
+            
+            phase_stats['phase'] = pd.Categorical(phase_stats['phase'], categories=phase_order, ordered=True)
+            phase_stats = phase_stats.sort_values('phase')
+            
+            # Chart
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                name='Term 1',
+                x=phase_stats['phase'],
+                y=phase_stats['Term 1'],
+                marker_color=COLORS['term1'],
+                opacity=0.7
+            ))
+            
+            fig.add_trace(go.Bar(
+                name='Term 2',
+                x=phase_stats['phase'],
+                y=phase_stats['Term 2'],
+                marker_color=COLORS['term2']
+            ))
+            
+            fig.update_layout(
+                title="Performance by Education Phase",
+                yaxis_title="Average Score (%)",
+                yaxis_range=[0, 100],
+                height=450,
+                barmode='group'
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Table
+            st.dataframe(
+                phase_stats[['phase', 'Term 1', 'Term 2', 'Improvement', 'Classes', 'Pass Rate']].style.format({
+                    'Term 1': '{:.1f}%',
+                    'Term 2': '{:.1f}%',
+                    'Improvement': '{:+.1f}pp',
+                    'Pass Rate': '{:.1f}%'
+                }).background_gradient(subset=['Improvement'], cmap='RdYlGn', vmin=-10, vmax=10),
+                use_container_width=True,
+                hide_index=True
+            )
+    
+    # -------------------------
+    # DATA TAB
+    # -------------------------
+    with tab_data:
+        st.subheader("Data Explorer")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            fellows_filter = st.multiselect(
+                "Fellow",
+                sorted(filtered['fellow_name'].unique()) if 'fellow_name' in filtered else [],
+                key="data_fellows"
+            )
+        
+        with col2:
+            subjects_filter = st.multiselect(
+                "Subject",
+                sorted(filtered['subject'].unique()),
+                key="data_subjects"
+            )
+        
+        with col3:
+            min_imp = st.slider(
+                "Min Improvement (%)",
+                -30.0, 30.0, -30.0,
+                key="min_imp"
+            )
+        
+        # Apply data filters
+        data_filtered = filtered.copy()
+        if fellows_filter:
+            data_filtered = data_filtered[data_filtered['fellow_name'].isin(fellows_filter)]
+        if subjects_filter:
+            data_filtered = data_filtered[data_filtered['subject'].isin(subjects_filter)]
+        data_filtered = data_filtered[data_filtered['improvement_pct'] >= min_imp]
+        
+        # Display
+        display_cols = ['fellow_name', 'subject', 'grade', 'phase', 'class_size', 
+                       'term_1_pct', 'term_2_pct', 'improvement_pct', 'pass_term_2']
+        
+        display_df = data_filtered[display_cols].rename(columns={
+            'fellow_name': 'Fellow',
+            'subject': 'Subject',
+            'grade': 'Grade',
+            'phase': 'Phase',
+            'class_size': 'Class Size',
+            'term_1_pct': 'Term 1 (%)',
+            'term_2_pct': 'Term 2 (%)',
+            'improvement_pct': 'Improvement (pp)',
+            'pass_term_2': 'Passing?'
+        })
+        
+        st.dataframe(
+            display_df.style.format({
+                'Term 1 (%)': '{:.1f}',
+                'Term 2 (%)': '{:.1f}',
+                'Improvement (pp)': '{:+.1f}'
+            }).background_gradient(subset=['Improvement (pp)'], cmap='RdYlGn'),
+            use_container_width=True,
+            height=500,
+            hide_index=True
+        )
+        
+        st.caption(f"Showing {len(data_filtered)} of {len(filtered)} classes")
+        
+        # Download
+        csv = display_df.to_csv(index=False)
+        st.download_button(
+            "📥 Download CSV",
+            csv,
+            f"academic_results_{datetime.now().strftime('%Y%m%d')}.csv",
+            "text/csv"
+        )
 
-    # ---- (rest of the original function continues below, unchanged)
-    metrics = calculate_overall_metrics(filtered)
-
-    # Render sections
-    render_overall_kpis(metrics)
-
-    st.markdown("---")
-    render_year_comparison_chart(filtered)
-
-    st.markdown("---")
-    render_subject_performance(filtered)
-
-    st.markdown("---")
-    render_phase_performance(filtered)
-
-    st.markdown("---")
-    render_full_data_table(filtered)
 
 # ========================================
-# TEST/DEMO
+# TEST
 # ========================================
 
 def test_academic_results():
-    """Test the academic results section with sample data."""
+    st.title("Academic Results - Tabbed Interface")
     
-    st.title("Academic Results Section - Test")
+    sample = pd.DataFrame([
+        {"fellow_name": "Mamsie C", "fellowship_year": 2, "subject": "Life Skills", "grade": 3, "phase_display": "Foundation Phase", "class_size": 56, "term_1_avg": 0.89, "term_2_avg": 0.90},
+        {"fellow_name": "Carmen B", "fellowship_year": 1, "subject": "Life Skills", "grade": 1, "phase_display": "Foundation Phase", "class_size": 16, "term_1_avg": 0.80, "term_2_avg": 0.91},
+        {"fellow_name": "Lailaa K", "fellowship_year": 1, "subject": "History", "grade": 4, "phase_display": "Intermediate Phase", "class_size": 25, "term_1_avg": 0.88, "term_2_avg": 0.87},
+    ] * 20)
     
-    # Sample data matching your actual structure
-    sample_data = pd.DataFrame([
-        {"fellow_name": "Mamsie Chauke", "fellowship_year": 2, "subject": "Life skills", "grade": 3, "phase_display": "Foundation Phase", "class_size": 56, "term_1_avg": 0.89, "term_2_avg": 0.90},
-        {"fellow_name": "Carmen Britz", "fellowship_year": 1, "subject": "Life Skills", "grade": 1, "phase_display": "Foundation Phase", "class_size": 16, "term_1_avg": 0.80, "term_2_avg": 0.91},
-        {"fellow_name": "Lailaa Koopman", "fellowship_year": 1, "subject": "History", "grade": 4, "phase_display": "Intermediate Phase", "class_size": 25, "term_1_avg": 0.88, "term_2_avg": 0.87},
-        {"fellow_name": "Lailaa Koopman", "fellowship_year": 1, "subject": "English", "grade": 4, "phase_display": "Intermediate Phase", "class_size": 25, "term_1_avg": 0.80, "term_2_avg": 0.86},
-        {"fellow_name": "Mamsie Chauke", "fellowship_year": 2, "subject": "Xitsonga", "grade": 3, "phase_display": "Foundation Phase", "class_size": 56, "term_1_avg": 0.84, "term_2_avg": 0.86},
-        {"fellow_name": "MBALENHLE MPHELA", "fellowship_year": 2, "subject": "ENGLISH", "grade": 6, "phase_display": "Intermediate Phase", "class_size": 35, "term_1_avg": 0.78, "term_2_avg": 0.95},
-    ] * 10)  # Multiply to have more data
-    
-    render_academic_results_section(sample_data)
+    render_academic_results_section(sample)
 
 
 if __name__ == "__main__":

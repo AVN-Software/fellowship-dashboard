@@ -1,748 +1,636 @@
-# classroom_observations_dashboard.py
-# -------------------------------------------------------------------
-# Streamlined, tab-based dashboard for TTN HITS observations
-# * Works standalone with generated sample data
-# * Robust to empty filters / edge cases
-# -------------------------------------------------------------------
-
+# pages/Enhanced_Tier_Progression.py
+from __future__ import annotations
 import streamlit as st
 import pandas as pd
 import numpy as np
+from typing import Optional, Dict, Any
+
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
-# add this near the top:
-from utils.supabase.database_manager import get_db
+from plotly.subplots import make_subplots
 
-# =========================
-# Page Config
-# =========================
-st.set_page_config(page_title="Classroom Observations (HITS)", page_icon="📊", layout="wide")
+# ---- repo-root import for database manager ----
+from pathlib import Path
+import sys
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
 
-# =========================
-# Constants & Palettes
-# =========================
-TERMS = ["Term 1", "Term 2"]  # focus on 1 & 2; sample gen can produce 3
-DOMAIN_NAMES = {
-    "KPC": "Knowledge Progression & Connections",
-    "LE": "Learning Environment",
-    "SE": "Student Engagement",
-    "AII": "Assessment-Informed Instruction",
-    "IAL": "Instructional Approach – Literacy",
-    "IAN": "Instructional Approach – Numeracy",
-}
-DOMAINS = list(DOMAIN_NAMES.keys())
+try:
+    from utils.supabase.database_manager import get_db
+except Exception as e:
+    get_db = None
+    st.warning(f"Could not import DatabaseManager: {e}")
 
-COLORS = {
-    "terms": {"Term 1": "#4E79A7", "Term 2": "#59A14F", "Term 3": "#F28E2B"},
-    "years": {"Year 1": "#4E79A7", "Year 2": "#59A14F"},
-    "tiers": {"Tier 1": "#E15759", "Tier 2": "#F1CE63", "Tier 3": "#59A14F"},
-    "domains": {
-        "LE": "#59A14F",
-        "SE": "#4E79A7",
-        "KPC": "#9C755F",
-        "AII": "#E15759",
-        "IAL": "#F28E2B",
-        "IAN": "#76B7B2",
-    },
-}
+TERM_ORDER = ["Term 1", "Term 2", "Term 3", "Term 4"]
 
-# =========================
-# Utilities
-# =========================
-def color_map_from_keys(keys, mapping):
-    return [mapping.get(k, "#888888") for k in keys]
+class EnhancedTierProgressionPage:
+    """Comprehensive Tier progression analysis using materialized view data."""
 
-def reset_filters():
-    for k in list(st.session_state.keys()):
-        if k.startswith("flt_") or k.startswith("tab_"):
-            del st.session_state[k]
-
-def kpi_card(label, value, delta=None, help_text=None):
-    st.metric(label, value, delta=delta, help=help_text)
-
-def safe_mean(series):
-    s = pd.to_numeric(series, errors="coerce").dropna()
-    return float(s.mean()) if len(s) else np.nan
-
-def _grade_key(g):
-    """Robust numeric sorter for 'Grade X' or plain ints/strings."""
-    try:
-        if isinstance(g, (int, float)): return int(g)
-        return int(str(g).split()[-1])
-    except Exception:
-        return 9999
-# =========================
-# Data (DB-backed with safe fallback)
-# =========================
-@st.cache_data(show_spinner=True)
-def load_observation_data():
-    """
-    Loads from Supabase view `v_observation_full`.
-    Produces:
-      - df_observations : one row per observation_id (lesson-level fields)
-      - df_domain_scores: domain-level rows (observation_id, domain, score, classification)
-      - df_full         : observation-level with `score` = mean of domain scores
-      - TERM_OPTIONS, SUBJECTS, GRADES for filters
-    Fallbacks to generated sample data if DB is empty/unavailable.
-    """
-    try:
-        db = get_db()
-        df_view = db.get_observations_full()  # expects your materialized view / view
-
-        if df_view is not None and not df_view.empty:
-            # --- domain-level ---
-            keep_domain_cols = ["observation_id", "domain", "score", "classification"]
-            df_domain_scores = (
-                df_view[keep_domain_cols]
-                .dropna(subset=["observation_id"])
-                .copy()
-            )
-
-            # --- observation-level (dedupe by observation_id) ---
-            obs_cols = [
-                "observation_id","term","date_lesson_observed","time_lesson",
-                "fellowship_year","coach_name","fellow_name","school_name",
-                "grade","subject","class_size","present_learners",
-            ]
-            # Keep only columns that exist (robust if schema shifts)
-            obs_cols = [c for c in obs_cols if c in df_view.columns]
-
-            df_observations = (
-                df_view[obs_cols]
-                .drop_duplicates(subset=["observation_id"])
-                .copy()
-            )
-
-            # --- compute mean domain score per observation ---
-            avg_by_obs = (
-                df_domain_scores
-                .groupby("observation_id", as_index=False)["score"]
-                .mean()
-                .rename(columns={"score": "score"})
-            )
-            df_full = df_observations.merge(avg_by_obs, on="observation_id", how="left")
-
-            # --- filter facets ---
-            # Limit to Term 1 & 2 if present (keep your page focus)
-            term_order = {"Term 1": 1, "Term 2": 2, "Term 3": 3, "Term 4": 4}
-            terms_raw = sorted(df_full["term"].dropna().unique(), key=lambda t: term_order.get(t, 999))
-            TERM_OPTIONS = [t for t in terms_raw if t in ("Term 1", "Term 2")] or terms_raw[:2]
-
-            SUBJECTS = sorted(df_full["subject"].dropna().unique()) if "subject" in df_full.columns else []
-            GRADES   = sorted(df_full["grade"].dropna().unique(), key=_grade_key) if "grade" in df_full.columns else []
-
-            return df_observations, df_domain_scores, df_full, TERM_OPTIONS, SUBJECTS, GRADES
-
-        # If we got here, DB returned nothing → fall back
-        st.warning("`v_observation_full` returned no rows; using sample data fallback.")
-        raise RuntimeError("Empty DB result")
-
-    except Exception:
-        # ---------- FALLBACK: sample generator ----------
-        st.info("Using generated sample data (DB unavailable or empty).")
-        np.random.seed(42)
-
-        fellows = [f"Fellow {i}" for i in range(1, 96)]
-        coaches = ["Coach Sarah", "Coach John", "Coach Maria", "Coach David", "Coach Lisa"]
-        subjects = ["Mathematics", "English", "Life Sciences", "Physical Sciences", "History"]
-        grades = ["Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"]
-        schools = ["Park High", "Ridge Secondary", "Valley School", "Summit Academy", "Horizon High"]
-
-        all_terms = ["Term 1", "Term 2", "Term 3"]
-        terms = all_terms[:2]
-
-        observations, domain_scores = [], []
-        obs_id_counter = 1
-
-        for term_idx, term in enumerate(terms):
-            num_obs_term = 70 + (term_idx * 15)
-            for _ in range(num_obs_term):
-                fellow = np.random.choice(fellows)
-                fellowship_year = 1 if fellows.index(fellow) < 45 else 2
-                coach = np.random.choice(coaches)
-                subject = np.random.choice(subjects)
-                grade = np.random.choice(grades)
-                school = np.random.choice(schools)
-
-                base_date = datetime(2024, 1, 1) + timedelta(days=term_idx * 90)
-                date_observed = base_date + timedelta(days=np.random.randint(0, 80))
-
-                class_size = np.random.randint(25, 45)
-                present_learners = int(class_size * np.random.uniform(0.8, 0.95))
-
-                obs_id = f"obs_{obs_id_counter}"
-                observations.append(
-                    {
-                        "observation_id": obs_id,
-                        "term": term,
-                        "date_lesson_observed": date_observed.date(),
-                        "time_lesson": f"{np.random.randint(8,15)}:00",
-                        "fellowship_year": fellowship_year,
-                        "coach_name": coach,
-                        "fellow_name": fellow,
-                        "school_name": school,
-                        "grade": grade,
-                        "subject": subject,
-                        "class_size": class_size,
-                        "present_learners": present_learners,
-                    }
-                )
-
-                base_score = 2.0 + (fellowship_year - 1) * 0.4 + term_idx * 0.25
-                difficulty = {"LE": 0.3, "SE": 0.2, "KPC": 0.1, "AII": -0.1, "IAL": -0.2, "IAN": -0.3}
-
-                for d in ["KPC","LE","SE","AII","IAL","IAN"]:
-                    s = base_score + difficulty[d] + np.random.uniform(-0.3, 0.3)
-                    s = max(1.0, min(4.0, s))
-                    tier = "Tier 1" if s < 2.3 else ("Tier 2" if s < 3.2 else "Tier 3")
-                    domain_scores.append({"observation_id": obs_id, "domain": d, "classification": tier, "score": round(s, 2)})
-
-                obs_id_counter += 1
-
-        df_observations = pd.DataFrame(observations)
-        df_domain_scores = pd.DataFrame(domain_scores)
-        df_full = df_observations.merge(
-            df_domain_scores.groupby("observation_id")["score"].mean().reset_index(),
-            on="observation_id",
-            how="left",
-        )
-        TERM_OPTIONS = ["Term 1", "Term 2"]
-        SUBJECTS = sorted(df_observations["subject"].unique())
-        GRADES = sorted(df_observations["grade"].unique(), key=_grade_key)
-
-        return df_observations, df_domain_scores, df_full, TERM_OPTIONS, SUBJECTS, GRADES
-
-
-# Load data now (DB or fallback)
-df_observations, df_domain_scores, df_full, TERM_OPTIONS, SUBJECTS, GRADES = load_observation_data()
-# =========================
-# Top Filter Bar (replaces sidebar)
-# =========================
-toolbar = st.container()
-with toolbar:
-    st.markdown("### 🎛️ Filters")
-    c1, c2, c3, c4, c5 = st.columns([1.2, 1.4, 1.2, 1.0, 0.7])
-
-    # guard against missing facet lists
-    _terms   = TERM_OPTIONS if len(TERM_OPTIONS) else []
-    _subjects= sorted(SUBJECTS) if len(SUBJECTS) else []
-    _grades  = sorted(GRADES, key=_grade_key) if len(GRADES) else []
-
-    flt_terms = c1.multiselect(
-        "Term",
-        options=_terms,
-        default=_terms,
-        key="flt_terms",
-        help="Select one or more terms",
-    )
-
-    flt_subjects = c2.multiselect(
-        "Subject",
-        options=_subjects,
-        default=_subjects,
-        key="flt_subjects",
-    )
-
-    flt_grades = c3.multiselect(
-        "Grade",
-        options=_grades,
-        default=_grades,
-        key="flt_grades",
-    )
-
-    flt_year = c4.radio(
-        "Fellowship Year",
-        options=["Both", "Year 1", "Year 2"],
-        horizontal=True,
-        key="flt_year",
-        index=0,
-    )
-
-    # Reset button on the far right
-    if c5.button("♻️ Reset", use_container_width=True, key="flt_reset"):
-        for k in list(st.session_state.keys()):
-            if k.startswith("flt_") or k.startswith("tab_"):
-                del st.session_state[k]
-        st.rerun()
-
-# =========================
-# Apply filters (global)
-# =========================
-filtered = df_full[
-    df_full["term"].isin(flt_terms)
-    & df_full["subject"].isin(flt_subjects)
-    & df_full["grade"].isin(flt_grades)
-].copy()
-
-if flt_year != "Both":
-    y = 1 if flt_year.endswith("1") else 2
-    filtered = filtered[filtered["fellowship_year"] == y]
-
-filtered_domain = df_domain_scores[
-    df_domain_scores["observation_id"].isin(filtered["observation_id"])
-].copy()
-
-# =========================
-# Header
-# =========================
-st.title("📊 Classroom Observations Dashboard")
-st.markdown("**Tracking teaching quality across HITS domains with termly progression**")
-st.caption("Demo with generated data. Swap `generate_sample_data` with your live DB query.")
-st.divider()
-
-# =========================
-# Helper computations
-# =========================
-def compute_kpis(df):
-    if df.empty:
-        return {
-            "total_obs": 0, "fellows_observed": 0, "total_fellows": df_observations["fellow_name"].nunique(),
-            "coverage": 0.0, "growth": np.nan, "first_mean": np.nan, "latest_avg": np.nan, "latest_count": 0
+    def __init__(self):
+        # Harmonized domain palette (matches app)
+        self.domain_colors = {
+            "LE":  "#59A14F",
+            "SE":  "#4E79A7",
+            "KPC": "#9C755F",
+            "AII": "#E15759",
+            "IAL": "#F28E2B",
+            "IAN": "#76B7B2",
+        }
+        self.tier_colors = {
+            "Tier 1": "#E15759",
+            "Tier 2": "#F1CE63",
+            "Tier 3": "#59A14F",
         }
 
-    total_obs = len(df)
-    fellows_observed = df["fellow_name"].nunique()
-    total_fellows = df_observations["fellow_name"].nunique()
-    coverage = (fellows_observed / total_fellows * 100) if total_fellows else 0.0
+    # -----------------------------
+    # Page entry
+    # -----------------------------
+    def render(self, df: Optional[pd.DataFrame]):
+        st.set_page_config(page_title="Advanced Tier Progression", page_icon="📈", layout="wide")
+        st.title("📈 Advanced Tier Progression Analysis")
+        st.caption("Materialized view: mv_comprehensive_tier_analysis")
 
-    if len(flt_terms) >= 2:
-        t_sorted = sorted(flt_terms)
-        first_mean = safe_mean(df[df["term"] == t_sorted[0]]["score"])
-        last_mean  = safe_mean(df[df["term"] == t_sorted[-1]]["score"])
-        growth = last_mean - first_mean if not (np.isnan(first_mean) or np.isnan(last_mean)) else np.nan
-    else:
-        first_mean = safe_mean(df["score"])
-        growth = np.nan
+        # Validate data
+        if df is None or df.empty:
+            st.error("No materialized view data available. Ensure mv_comprehensive_tier_analysis is populated and RLS allows read.")
+            return
 
-    latest_term = max(flt_terms) if len(flt_terms) else None
-    latest_avg  = safe_mean(df[df["term"] == latest_term]["score"]) if latest_term else np.nan
-    latest_count = int(len(df[df["term"] == latest_term])) if latest_term else 0
+        # Normalize/prepare columns
+        df = self._prepare(df)
 
-    return {
-        "total_obs": total_obs, "fellows_observed": fellows_observed, "total_fellows": total_fellows,
-        "coverage": coverage, "growth": growth, "first_mean": first_mean,
-        "latest_avg": latest_avg, "latest_count": latest_count
-    }
+        # -----------------------------
+        # Top bar filters
+        # -----------------------------
+        toolbar = st.container()
+        with toolbar:
+            st.markdown("### 🎛️ Filters")
+            c1, c2, c3, c4, c5 = st.columns([1.3, 1.3, 1.3, 1.1, 0.8])
 
-def line_progression_overall(df):
-    if df.empty:
-        return go.Figure()
-    term_avg = df.groupby("term", as_index=False)["score"].mean().sort_values("term")
-    fig = px.line(
-        term_avg, x="term", y="score", markers=True,
-        title="Overall Teaching Quality Across Terms",
-        labels={"score": "Average Score", "term": "Term"},
-        color_discrete_sequence=color_map_from_keys(term_avg["term"], COLORS["terms"]),
-    )
-    fig.update_traces(line_width=3)
-    fig.update_layout(height=380, yaxis=dict(range=[0, 4]))
-    return fig
-
-def line_progression_by_year(df):
-    if df.empty:
-        return go.Figure()
-    term_avg = df.groupby(["term", "fellowship_year"], as_index=False)["score"].mean()
-    term_avg["Year"] = "Year " + term_avg["fellowship_year"].astype(int).astype(str)
-    fig = px.line(
-        term_avg, x="term", y="score", color="Year", markers=True,
-        title="Overall Teaching Quality: Year 1 vs Year 2",
-        labels={"score": "Average Score", "term": "Term"},
-        color_discrete_map=COLORS["years"],
-    )
-    fig.update_layout(height=380, yaxis=dict(range=[0, 4]))
-    return fig
-
-def domain_term_bar(df_domain, df_obs):
-    if df_domain.empty or df_obs.empty:
-        return go.Figure()
-    data = df_domain.merge(df_obs[["observation_id", "term"]], on="observation_id", how="left")
-    domain_term = data.groupby(["domain", "term"], as_index=False)["score"].mean()
-    domain_term["domain_name"] = domain_term["domain"].map(DOMAIN_NAMES)
-    fig = px.bar(
-        domain_term, x="domain_name", y="score", color="term", barmode="group",
-        title="Domain Performance Across Terms",
-        labels={"domain_name": "Domain", "score": "Average Score", "term": "Term"},
-        color_discrete_map=COLORS["terms"],
-    )
-    fig.update_layout(height=480, yaxis=dict(range=[0, 4]))
-    return fig
-
-def latest_domain_bar(df_domain, df_obs, split_by_year=False):
-    latest = max(flt_terms) if flt_terms else None
-    if (latest is None) or df_domain.empty or df_obs.empty:
-        return go.Figure()
-
-    data = df_domain.merge(df_obs[["observation_id", "term", "fellowship_year"]], on="observation_id", how="left")
-    data = data[data["term"] == latest]
-    if data.empty:
-        return go.Figure()
-
-    if split_by_year and flt_year == "Both":
-        g = data.groupby(["domain", "fellowship_year"], as_index=False)["score"].mean()
-        g["Year"] = "Year " + g["fellowship_year"].astype(int).astype(str)
-        g["domain_name"] = g["domain"].map(DOMAIN_NAMES)
-        fig = px.bar(
-            g, x="domain_name", y="score", color="Year", barmode="group",
-            title=f"Domain Performance — {latest}",
-            labels={"domain_name": "Domain", "score": "Average Score"},
-            color_discrete_map=COLORS["years"],
-        )
-        fig.update_layout(height=460, yaxis=dict(range=[0, 4]))
-        return fig
-
-    g = data.groupby("domain", as_index=False)["score"].mean()
-    g["domain_name"] = g["domain"].map(DOMAIN_NAMES)
-    g = g.sort_values("score", ascending=True)
-    fig = px.bar(
-        g, x="score", y="domain_name", orientation="h",
-        title=f"Domain Performance — {latest}",
-        labels={"domain_name": "Domain", "score": "Average Score"},
-        color_discrete_sequence=["#4E79A7"],
-    )
-    fig.update_layout(height=460, xaxis=dict(range=[0, 4]))
-    return fig
-
-def tier_stack_for_term(df_domain, df_obs, selected_term):
-    if (df_domain.empty or df_obs.empty or selected_term is None):
-        return None, None
-    data = df_domain.merge(df_obs[["observation_id", "term"]], on="observation_id", how="left")
-    data = data[data["term"] == selected_term]
-    if data.empty:
-        return None, None
-
-    dist = data.groupby(["domain", "classification"], as_index=False).size().rename(columns={"size": "count"})
-    totals = data.groupby("domain", as_index=False).size().rename(columns={"size": "total"})
-    dist = dist.merge(totals, on="domain", how="left")
-    dist["pct"] = (dist["count"] / dist["total"]) * 100
-
-    pivot = dist.pivot(index="domain", columns="classification", values="pct").fillna(0.0)
-    for t in ["Tier 1", "Tier 2", "Tier 3"]:
-        if t not in pivot.columns:
-            pivot[t] = 0.0
-    pivot = pivot[["Tier 1", "Tier 2", "Tier 3"]]
-    pivot["domain_name"] = pivot.index.map(DOMAIN_NAMES)
-
-    fig = go.Figure()
-    for t in ["Tier 1", "Tier 2", "Tier 3"]:
-        fig.add_trace(
-            go.Bar(
-                name=t,
-                x=pivot["domain_name"],
-                y=pivot[t],
-                marker_color=COLORS["tiers"][t],
-                text=[f"{v:.0f}%" for v in pivot[t]],
-                textposition="inside",
+            # Segment selection
+            segment_choice = c1.selectbox(
+                "Segment",
+                ["Overall", "School Level", "Fellowship Year", "Both"],
+                index=0,
+                key="tier_seg",
             )
-        )
-    fig.update_layout(
-        barmode="stack",
-        title=f"Tier Distribution by Domain — {selected_term}",
-        xaxis_title="Domain",
-        yaxis_title="Percentage",
-        height=420,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        yaxis=dict(range=[0, 100]),
-    )
+            segment_map = {
+                "Overall": None,
+                "School Level": "school_level",
+                "Fellowship Year": "fellow_year",
+                "Both": "both",
+            }
+            segment_col = segment_map[segment_choice]
 
-    tier3_pct = pivot["Tier 3"].mean()
-    tier2_plus_pct = (pivot["Tier 2"] + pivot["Tier 3"]).mean()
-    return fig, {"tier3_avg_pct": tier3_pct, "tier2_plus_avg_pct": tier2_plus_pct}
-
-def bar_by_category(df, category_col, split_by_year=False, title=""):
-    if df.empty:
-        return go.Figure()
-    if split_by_year and flt_year == "Both":
-        g = df.groupby([category_col, "fellowship_year"], as_index=False)["score"].mean()
-        g["Year"] = "Year " + g["fellowship_year"].astype(int).astype(str)
-        fig = px.bar(
-            g, x=category_col, y="score", color="Year", barmode="group",
-            title=title, labels={"score": "Average Score"},
-            color_discrete_map=COLORS["years"],
-        )
-    else:
-        g = df.groupby(category_col, as_index=False)["score"].mean()
-        if category_col == "grade":
-            g["__gnum"] = g[category_col].map(_grade_key)
-            g = g.sort_values("__gnum")
-        fig = px.bar(
-            g, x=category_col, y="score",
-            title=title, labels={"score": "Average Score"},
-            color_discrete_sequence=["#4E79A7"],
-        )
-    fig.update_layout(height=380, yaxis=dict(range=[0, 4]))
-    return fig
-
-# =========================
-# Tabs
-# =========================
-tab_overview, tab_domains, tab_subjects_grades, tab_fellows, tab_data = st.tabs(
-    ["📌 Overview", "🧭 Domains & Tiers", "📚 Subjects & Grades", "👤 Fellows", "📋 Data Explorer"]
-)
-
-# -------------------------
-# Overview
-# -------------------------
-with tab_overview:
-    st.subheader("Program Overview")
-    if filtered.empty:
-        st.warning("No data available for selected filters.")
-    else:
-        kpis = compute_kpis(filtered)
-        c1, c2, c3, c4 = st.columns(4)
-        with c1: kpi_card("Total Observations", f"{kpis['total_obs']:,}")
-        with c2: kpi_card("Coverage", f"{kpis['coverage']:.0f}%")
-        with c3: kpi_card("Avg Score (Latest)", f"{(kpis['latest_avg'] if not np.isnan(kpis['latest_avg']) else 0):.2f}")
-        with c4:
-            delta = f"{kpis['growth']:+.2f}" if not np.isnan(kpis["growth"]) else None
-            base_delta = (kpis['latest_avg'] - kpis['first_mean']) if not np.isnan(kpis['latest_avg']) else np.nan
-            kpi_card("Term-on-Term Growth", f"{(base_delta if not np.isnan(base_delta) else 0):+.2f}", delta=delta)
-
-        colA, colB = st.columns([2, 1])
-        with colA:
-            st.plotly_chart(
-                line_progression_by_year(filtered) if flt_year == "Both" else line_progression_overall(filtered),
-                use_container_width=True,
-            )
-        with colB:
-            st.markdown("### Insight")
-            if not np.isnan(kpis["growth"]):
-                st.info(
-                    f"**Trend:** From **{kpis['first_mean']:.2f}** to **{kpis['latest_avg']:.2f}** — "
-                    f"change **{kpis['growth']:+.2f}**."
-                )
-            st.caption(
-                f"Fellows observed: **{kpis['fellows_observed']}** / total **{kpis['total_fellows']}** "
-                f"(**{kpis['coverage']:.0f}%** coverage)."
+            # Domains
+            domains = sorted(df["domain"].dropna().unique().tolist())
+            sel_domains = c2.multiselect(
+                "Domains",
+                options=domains,
+                default=domains,
+                key="tier_domains",
             )
 
-# -------------------------
-# Domains & Tiers
-# -------------------------
-with tab_domains:
-    st.subheader("Domains & Tiers")
-    if filtered.empty:
-        st.warning("No data available for selected filters.")
-    else:
-        col_ctrl = st.columns([1, 1, 2])
-        with col_ctrl[0]:
-            view_mode = st.radio("View", options=["Progress (All Terms)", "Latest Term Only"], horizontal=False, key="tab_domains_view")
-        with col_ctrl[1]:
-            split_by_year = st.toggle("Split by Year", value=(flt_year == "Both"), key="tab_domains_split_by_year")
+            # Terms
+            terms_present = [t for t in TERM_ORDER if t in df["term"].unique()]
+            sel_terms = c3.multiselect(
+                "Terms",
+                options=terms_present,
+                default=terms_present,
+                key="tier_terms",
+            )
 
-        if view_mode == "Progress (All Terms)":
-            st.plotly_chart(domain_term_bar(filtered_domain, filtered), use_container_width=True)
-        else:
-            st.plotly_chart(latest_domain_bar(filtered_domain, filtered, split_by_year=split_by_year), use_container_width=True)
+            # Analysis type
+            analysis_type = c4.selectbox(
+                "Analysis",
+                ["Tier Mix Evolution", "Performance Trends", "Strategic Analysis", "Comparative Analysis"],
+                index=0,
+                key="tier_analysis",
+            )
 
-        st.markdown("---")
-        col_ta, col_tb = st.columns([2, 1])
-        with col_ta:
-            valid_terms = sorted(set(flt_terms))
-            idx = max(0, len(valid_terms) - 1)
-            sel_term = st.selectbox("Select term for tier distribution", options=valid_terms or ["(none)"], index=idx)
-            fig_tier, tier_summary = (tier_stack_for_term(filtered_domain, filtered, sel_term) if valid_terms else (None, None))
-            if fig_tier is not None:
-                st.plotly_chart(fig_tier, use_container_width=True)
-            else:
-                st.warning("No tier data for the selected term.")
-        with col_tb:
-            st.markdown("### Tier Insights")
-            if tier_summary:
-                st.success(f"**Tier 3 (Advanced):** ~{tier_summary['tier3_avg_pct']:.0f}% on average across domains.")
-                st.info(f"**Tier 2+:** ~{tier_summary['tier2_plus_avg_pct']:.0f}% across domains.")
-                st.caption("Interpretation: strong Tier 2→3 migration suggests effective instructional coaching.")
-            else:
-                st.caption("Select a term with data to view tier insights.")
+            if c5.button("♻️ Reset", use_container_width=True):
+                for k in list(st.session_state.keys()):
+                    if k.startswith("tier_"):
+                        del st.session_state[k]
+                st.rerun()
 
-# -------------------------
-# Subjects & Grades
-# -------------------------
-with tab_subjects_grades:
-    st.subheader("Subjects & Grades")
-    if filtered.empty:
-        st.warning("No data available for selected filters.")
-    else:
+        # Apply filters
+        work = df.copy()
+        if sel_domains:
+            work = work[work["domain"].isin(sel_domains)]
+        if sel_terms:
+            work = work[work["term"].isin(sel_terms)]
+
+        if work.empty:
+            st.warning("No rows after applying filters.")
+            return
+
+        # Dispatch to analysis
+        if analysis_type == "Tier Mix Evolution":
+            self._render_tier_mix_analysis(work, segment_col)
+        elif analysis_type == "Performance Trends":
+            self._render_performance_trends(work, segment_col)
+        elif analysis_type == "Strategic Analysis":
+            self._render_strategic_analysis(work, segment_col)
+        elif analysis_type == "Comparative Analysis":
+            self._render_comparative_analysis(work, segment_col)
+
+    # -----------------------------
+    # Prep
+    # -----------------------------
+    def _prepare(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+
+        # Expected columns from the MV:
+        # term, domain, fellow_year OR fellowship_year, school_level,
+        # tier_mix_t1_pct, tier_mix_t2_pct, tier_mix_t3_pct,
+        # domain_avg, dominant_index,
+        # avg_tier_score_t1, avg_tier_score_t2, avg_tier_score_t3
+        # strongest_tier, weakest_tier, strongest_index, weakest_index
+
+        # Map fellowship_year→fellow_year if needed; convert to "Year X"
+        if "fellow_year" not in df.columns and "fellowship_year" in df.columns:
+            df["fellow_year"] = df["fellowship_year"]
+        df["fellow_year"] = df.get("fellow_year")
+        if "fellow_year" in df.columns:
+            df["fellow_year"] = df["fellow_year"].apply(
+                lambda x: f"Year {int(x)}" if pd.notna(x) else None
+            )
+
+        # Ensure term order
+        if "term" in df.columns:
+            df["term"] = pd.Categorical(df["term"], categories=TERM_ORDER, ordered=True)
+
+        # Coerce numeric fields (ignore missing)
+        for col in [
+            "tier_mix_t1_pct", "tier_mix_t2_pct", "tier_mix_t3_pct",
+            "domain_avg", "dominant_index",
+            "avg_tier_score_t1", "avg_tier_score_t2", "avg_tier_score_t3",
+        ]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        # Domain codes cleanup: sometimes "IA" sneaks in → split Literacy/Numeracy if present
+        df["domain"] = df["domain"].replace({"IA": "IAL"})  # prefer IAL (if your MV uses IA, change mapping here)
+
+        return df
+
+    # -----------------------------
+    # Tier Mix Evolution
+    # -----------------------------
+    def _render_tier_mix_analysis(self, df: pd.DataFrame, segment_col: Optional[str]):
+        st.header("🎯 Tier Mix Evolution")
+
         c1, c2 = st.columns(2)
         with c1:
-            split_year_sbj = st.toggle("Split Subjects by Year", value=(flt_year == "Both"), key="tab_sbj_split")
-            st.plotly_chart(bar_by_category(filtered, "subject", split_by_year=split_year_sbj, title="Teaching Quality by Subject"), use_container_width=True)
+            st.subheader("📊 Tier 3% Progression by Domain")
+            self._create_tier3_progression(df, segment_col)
         with c2:
-            split_year_grd = st.toggle("Split Grades by Year", value=(flt_year == "Both"), key="tab_grd_split")
-            st.plotly_chart(bar_by_category(filtered, "grade", split_by_year=split_year_grd, title="Teaching Quality by Grade"), use_container_width=True)
+            st.subheader("📈 Dominant Index Progression")
+            self._create_dominant_index_chart(df, segment_col)
 
-# -------------------------
-# Fellows
-# -------------------------
-with tab_fellows:
-    st.subheader("Fellow Progress Tracking & Recognition")
-    if filtered.empty:
-        st.warning("No data available for selected filters.")
-    else:
-        cA, cB = st.columns([2, 2])
+        st.subheader("📋 Detailed Tier Mix Analysis")
+        self._create_tier_mix_table(df, segment_col)
 
-        with cA:
-            fellow_options = sorted(filtered["fellow_name"].unique())
-            if not fellow_options:
-                st.info("No fellows under current filters.")
-            else:
-                selected_fellow = st.selectbox("Select a Fellow", options=fellow_options, key="tab_fellow_select")
-                fellow_df = filtered[filtered["fellow_name"] == selected_fellow].sort_values("date_lesson_observed")
-                fellow_domain_df = filtered_domain[
-                    filtered_domain["observation_id"].isin(fellow_df["observation_id"])
-                ].merge(
-                    fellow_df[["observation_id", "term", "date_lesson_observed"]],
-                    on="observation_id",
-                    how="left",
+        st.subheader("🔄 Term-to-Term Movement Analysis")
+        self._create_movement_analysis(df, segment_col)
+
+    def _create_tier3_progression(self, df: pd.DataFrame, segment_col: Optional[str]):
+        fig = go.Figure()
+
+        if segment_col and segment_col != "both":
+            for seg in sorted(df[segment_col].dropna().unique()):
+                seg_df = df[df[segment_col] == seg]
+                for dom in sorted(seg_df["domain"].dropna().unique()):
+                    dom_df = (
+                        seg_df[seg_df["domain"] == dom]
+                        .groupby("term", as_index=False)["tier_mix_t3_pct"]
+                        .mean()
+                        .sort_values("term")
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=dom_df["term"], y=dom_df["tier_mix_t3_pct"],
+                            mode="lines+markers",
+                            name=f"{dom} ({seg})",
+                            line=dict(color=self.domain_colors.get(dom, "#888888")),
+                        )
+                    )
+        else:
+            for dom in sorted(df["domain"].dropna().unique()):
+                dom_df = (
+                    df[df["domain"] == dom]
+                    .groupby("term", as_index=False)["tier_mix_t3_pct"]
+                    .mean()
+                    .sort_values("term")
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=dom_df["term"], y=dom_df["tier_mix_t3_pct"],
+                        mode="lines+markers",
+                        name=dom,
+                        line=dict(color=self.domain_colors.get(dom, "#888888")),
+                    )
                 )
 
-                show_breakdown = st.checkbox("Show domain breakdown", value=True, key="tab_fellow_breakdown")
+        fig.update_layout(
+            height=420,
+            yaxis_title="Tier 3 (%)",
+            xaxis_title="Term",
+            hovermode="x unified",
+            yaxis=dict(range=[0, 100]),
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-                if not fellow_df.empty:
-                    if show_breakdown and not fellow_domain_df.empty:
-                        d = fellow_domain_df.groupby(["term", "domain"], as_index=False)["score"].mean()
-                        d["domain_name"] = d["domain"].map(DOMAIN_NAMES)
-                        fig = px.line(
-                            d, x="term", y="score", color="domain_name", markers=True,
-                            title=f"{selected_fellow} — Progress by Domain",
-                            labels={"score": "Average Score", "term": "Term", "domain_name": "Domain"},
-                            color_discrete_map={k: COLORS["domains"][k] for k in DOMAINS},
+    def _create_dominant_index_chart(self, df: pd.DataFrame, segment_col: Optional[str]):
+        fig = go.Figure()
+
+        if segment_col and segment_col != "both":
+            for seg in sorted(df[segment_col].dropna().unique()):
+                seg_df = df[df[segment_col] == seg]
+                for dom in sorted(seg_df["domain"].dropna().unique()):
+                    dom_df = (
+                        seg_df[seg_df["domain"] == dom]
+                        .groupby("term", as_index=False)["dominant_index"]
+                        .mean()
+                        .sort_values("term")
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=dom_df["term"], y=dom_df["dominant_index"],
+                            mode="lines+markers",
+                            name=f"{dom} ({seg})",
+                            line=dict(color=self.domain_colors.get(dom, "#888888")),
                         )
-                    else:
-                        g = fellow_df.groupby("term", as_index=False)["score"].mean()
-                        fig = px.line(
-                            g, x="term", y="score", markers=True,
-                            title=f"{selected_fellow} — Overall Progress",
-                            labels={"score": "Average Score", "term": "Term"},
-                            color_discrete_sequence=["#59A14F"],
-                        )
-                    fig.update_layout(height=380, yaxis=dict(range=[0, 4]))
-                    st.plotly_chart(fig, use_container_width=True)
+                    )
+        else:
+            for dom in sorted(df["domain"].dropna().unique()):
+                dom_df = (
+                    df[df["domain"] == dom]
+                    .groupby("term", as_index=False)["dominant_index"]
+                    .mean()
+                    .sort_values("term")
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=dom_df["term"], y=dom_df["dominant_index"],
+                        mode="lines+markers",
+                        name=dom,
+                        line=dict(color=self.domain_colors.get(dom, "#888888")),
+                    )
+                )
 
-                    c1, c2, c3, c4 = st.columns(4)
-                    with c1: kpi_card("Total Observations", len(fellow_df))
-                    with c2:
-                        latest_score = float(fellow_df["score"].iloc[-1])
-                        kpi_card("Latest Score", f"{latest_score:.2f}")
-                    with c3:
-                        if len(fellow_df) >= 2:
-                            first_score = float(fellow_df["score"].iloc[0])
-                            growth = latest_score - first_score
-                            pct = f"{(growth/first_score*100):.0f}%" if first_score > 0 else None
-                            kpi_card("Total Growth", f"{growth:+.2f}", delta=pct)
-                        else:
-                            kpi_card("Total Growth", "N/A")
-                    with c4: kpi_card("Average Score", f"{safe_mean(fellow_df['score']):.2f}")
+        fig.add_hline(y=2.0, line_dash="dash", line_color="gray", annotation_text="Balanced (2.0)")
+        fig.add_hline(y=2.5, line_dash="dash", line_color="green", annotation_text="Strong (2.5)")
+        fig.update_layout(height=420, yaxis_title="Dominant Index", xaxis_title="Term", yaxis=dict(range=[1.0, 3.0]))
+        st.plotly_chart(fig, use_container_width=True)
 
-                    st.markdown("##### Latest Observation")
-                    lo = fellow_df.iloc[-1]
-                    d1, d2, d3, d4 = st.columns(4)
-                    with d1: st.write(f"**Date:** {lo['date_lesson_observed']}  \n**Term:** {lo['term']}")
-                    with d2: st.write(f"**School:** {lo['school_name']}  \n**Grade:** {lo['grade']}")
-                    with d3: st.write(f"**Subject:** {lo['subject']}  \n**Coach:** {lo['coach_name']}")
-                    with d4: st.write(f"**Class Size:** {lo['class_size']}  \n**Present:** {lo['present_learners']}")
-                else:
-                    st.warning("No observations for the selected fellow under current filters.")
-
-        with cB:
-            st.markdown("#### Recognition")
-            top = (
-                filtered.groupby("fellow_name")["score"]
+    def _create_tier_mix_table(self, df: pd.DataFrame, segment_col: Optional[str]):
+        rows = []
+        def add_row(frame: pd.DataFrame, domain: str, segment: str):
+            g = (
+                frame.groupby("term", as_index=False)[
+                    ["tier_mix_t1_pct", "tier_mix_t2_pct", "tier_mix_t3_pct", "dominant_index"]
+                ]
                 .mean()
-                .sort_values(ascending=False)
-                .head(10)
-                .reset_index()
+                .sort_values("term")
             )
-            st.write("**🏆 Highest Average Scores**")
-            if len(top):
-                for i, row in enumerate(top.itertuples(index=False), start=1):
-                    count = int((filtered["fellow_name"] == row.fellow_name).sum())
-                    st.write(f"{i}. **{row.fellow_name}** — {row.score:.2f} ({count} obs)")
-            else:
-                st.caption("No data to display.")
+            terms = g["term"].tolist()
+            if len(terms) < 2:
+                return
+            row = {"Domain": domain, "Segment": segment}
+            for _, r in g.iterrows():
+                t = r["term"]
+                row[f"{t} T1%"] = r["tier_mix_t1_pct"]
+                row[f"{t} T2%"] = r["tier_mix_t2_pct"]
+                row[f"{t} T3%"] = r["tier_mix_t3_pct"]
+                row[f"{t} Index"] = r["dominant_index"]
+            first, last = terms[0], terms[-1]
+            r1 = g[g["term"] == first].iloc[0]
+            r2 = g[g["term"] == last].iloc[0]
+            row["T3 Change"] = r2["tier_mix_t3_pct"] - r1["tier_mix_t3_pct"]
+            row["Index Change"] = r2["dominant_index"] - r1["dominant_index"]
+            rows.append(row)
 
-            st.markdown("---")
-            st.write("**📈 Most Improved (first vs latest)**")
-            improvements = []
-            for f in filtered["fellow_name"].unique():
-                fdf = filtered[filtered["fellow_name"] == f].sort_values("date_lesson_observed")
-                if len(fdf) >= 2:
-                    first_s, last_s = float(fdf["score"].iloc[0]), float(fdf["score"].iloc[-1])
-                    improvements.append((f, last_s - first_s, first_s, last_s))
-            if improvements:
-                imp_df = (
-                    pd.DataFrame(improvements, columns=["fellow", "improvement", "first", "latest"])
-                    .sort_values("improvement", ascending=False)
-                    .head(10)
+        if segment_col and segment_col != "both":
+            for dom in sorted(df["domain"].dropna().unique()):
+                dom_df = df[df["domain"] == dom]
+                for seg in sorted(dom_df[segment_col].dropna().unique()):
+                    add_row(dom_df[dom_df[segment_col] == seg], dom, str(seg))
+        else:
+            for dom in sorted(df["domain"].dropna().unique()):
+                add_row(df[df["domain"] == dom], dom, "Overall")
+
+        if rows:
+            out = pd.DataFrame(rows)
+            st.dataframe(
+                out.style.format({c: "{:.1f}%" for c in out.columns if c.endswith("%")})
+                        .format({c: "{:.2f}" for c in out.columns if c.endswith("Index") or "Change" in c}),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    def _create_movement_analysis(self, df: pd.DataFrame, segment_col: Optional[str]):
+        moves = []
+        def add_moves(frame: pd.DataFrame, domain: str, segment: str):
+            g = (
+                frame.groupby("term", as_index=False)[["tier_mix_t3_pct", "dominant_index"]]
+                .mean()
+                .sort_values("term")
+            )
+            terms = g["term"].tolist()
+            for i in range(len(terms)-1):
+                a, b = terms[i], terms[i+1]
+                r1 = g[g["term"] == a].iloc[0]; r2 = g[g["term"] == b].iloc[0]
+                d_t3 = r2["tier_mix_t3_pct"] - r1["tier_mix_t3_pct"]
+                d_idx = r2["dominant_index"] - r1["dominant_index"]
+                movement = "📈 Improvement" if d_t3 > 2 else ("📉 Decline" if d_t3 < -2 else "➡️ Stable")
+                moves.append({
+                    "Domain": domain, "Segment": segment, "Period": f"{a} → {b}",
+                    "T3 Change": f"{d_t3:+.1f}%", "Index Change": f"{d_idx:+.2f}", "Movement": movement
+                })
+
+        if segment_col and segment_col != "both":
+            for dom in sorted(df["domain"].dropna().unique()):
+                dom_df = df[df["domain"] == dom]
+                for seg in sorted(dom_df[segment_col].dropna().unique()):
+                    add_moves(dom_df[dom_df[segment_col] == seg], dom, str(seg))
+        else:
+            for dom in sorted(df["domain"].dropna().unique()):
+                add_moves(df[df["domain"] == dom], dom, "Overall")
+
+        if moves:
+            st.dataframe(pd.DataFrame(moves), use_container_width=True, hide_index=True)
+
+    # -----------------------------
+    # Performance Trends
+    # -----------------------------
+    def _render_performance_trends(self, df: pd.DataFrame, segment_col: Optional[str]):
+        st.header("📊 Performance Trends Analysis")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("🎯 Domain Performance Evolution (Avg)")
+            self._create_domain_performance_chart(df)
+        with c2:
+            st.subheader("🏆 Tier Performance Scores")
+            self._create_tier_performance_chart(df)
+
+        st.subheader("🔥 Performance Heatmap")
+        self._create_performance_heatmap(df)
+
+        st.subheader("💪 Recovery & Resilience Analysis")
+        self._create_recovery_analysis(df)
+
+    def _create_domain_performance_chart(self, df: pd.DataFrame):
+        fig = go.Figure()
+        for dom in sorted(df["domain"].dropna().unique()):
+            dom_df = (
+                df[df["domain"] == dom]
+                .groupby("term", as_index=False)["domain_avg"]
+                .mean()
+                .sort_values("term")
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=dom_df["term"], y=dom_df["domain_avg"],
+                    mode="lines+markers", name=dom,
+                    line=dict(color=self.domain_colors.get(dom, "#888888")),
                 )
-                for i, r in enumerate(imp_df.itertuples(index=False), start=1):
-                    st.write(f"{i}. **{r.fellow}** — {r.improvement:+.2f} ({r.first:.2f} → {r.latest:.2f})")
-                st.caption("_Note: treat improvements based on very few observations with caution._")
-            else:
-                st.caption("Need at least 2 observations per fellow to compute improvement.")
+            )
+        # Domain averages are on a 1–4 scale in your app
+        fig.update_layout(height=420, yaxis_title="Average Domain Score", xaxis_title="Term",
+                          yaxis=dict(range=[1.0, 4.0]))
+        st.plotly_chart(fig, use_container_width=True)
 
-# -------------------------
-# Data Explorer
-# -------------------------
-with tab_data:
-    st.subheader("Full Observation Records")
-    if filtered.empty:
-        st.warning("No data available for selected filters.")
-    else:
-        ta, tb, tc, td = st.columns(4)
-        with ta:
-            tf_fellows = st.multiselect("Fellows", options=sorted(filtered["fellow_name"].unique()), key="tab_tbl_fellows")
-        with tb:
-            tf_coaches = st.multiselect("Coaches", options=sorted(filtered["coach_name"].unique()), key="tab_tbl_coaches")
-        with tc:
-            tf_schools = st.multiselect("Schools", options=sorted(filtered["school_name"].unique()), key="tab_tbl_schools")
-        with td:
-            tf_terms = st.multiselect("Terms", options=sorted(filtered["term"].unique()), key="tab_tbl_terms")
+    def _create_tier_performance_chart(self, df: pd.DataFrame):
+        fig = make_subplots(rows=1, cols=3, subplot_titles=["Tier 1", "Tier 2", "Tier 3"])
+        for i, col in enumerate(["avg_tier_score_t1", "avg_tier_score_t2", "avg_tier_score_t3"], start=1):
+            for dom in sorted(df["domain"].dropna().unique()):
+                dom_df = (
+                    df[df["domain"] == dom]
+                    .groupby("term", as_index=False)[col]
+                    .mean()
+                    .sort_values("term")
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=dom_df["term"], y=dom_df[col], mode="lines+markers",
+                        name=dom, line=dict(color=self.domain_colors.get(dom, "#888888")),
+                        showlegend=(i == 1),
+                    ),
+                    row=1, col=i,
+                )
+        fig.update_layout(height=420, yaxis=dict(range=[1.0, 4.0]), title="Tier Performance Scores by Domain")
+        st.plotly_chart(fig, use_container_width=True)
 
-        table_df = filtered.copy()
-        if tf_fellows: table_df = table_df[table_df["fellow_name"].isin(tf_fellows)]
-        if tf_coaches: table_df = table_df[table_df["coach_name"].isin(tf_coaches)]
-        if tf_schools: table_df = table_df[table_df["school_name"].isin(tf_schools)]
-        if tf_terms:   table_df = table_df[table_df["term"].isin(tf_terms)]
-
-        pivot = (
-            filtered_domain[filtered_domain["observation_id"].isin(table_df["observation_id"])]
-            .pivot_table(index="observation_id", columns="domain", values="score", aggfunc="mean")
-            .reset_index()
+    def _create_performance_heatmap(self, df: pd.DataFrame):
+        heat = (
+            df.groupby(["domain", "term"], as_index=False)["domain_avg"]
+            .mean().pivot(index="domain", columns="term", values="domain_avg")
         )
-        table_display = table_df.merge(pivot, on="observation_id", how="left")
+        fig = go.Figure(
+            data=go.Heatmap(z=heat.values, x=heat.columns, y=heat.index, colorscale="RdYlGn",
+                            colorbar=dict(title="Avg Score (1–4)"))
+        )
+        fig.update_layout(height=420, xaxis_title="Term", yaxis_title="Domain")
+        st.plotly_chart(fig, use_container_width=True)
 
-        display_cols = [
-            "term","date_lesson_observed","fellow_name","coach_name","school_name","grade",
-            "subject","score","class_size","present_learners",
-        ] + [d for d in DOMAINS if d in table_display.columns]
+    def _create_recovery_analysis(self, df: pd.DataFrame):
+        rows = []
+        for dom in sorted(df["domain"].dropna().unique()):
+            d = df[df["domain"] == dom]
+            t1 = d[d["term"] == "Term 1"]["domain_avg"].mean()
+            t2 = d[d["term"] == "Term 2"]["domain_avg"].mean()
+            t3 = d[d["term"] == "Term 3"]["domain_avg"].mean()
+            if not np.isnan(t1) and not np.isnan(t2) and not np.isnan(t3):
+                decline = t2 - t1
+                recovery = t3 - t2
+                net = t3 - t1
+                tag = "🚀 Exceptional" if recovery > 0.25 else ("💪 Strong" if recovery > 0.15 else ("📈 Moderate" if recovery > 0 else "📉 Continued Decline"))
+                rows.append({
+                    "Domain": dom,
+                    "T1": f"{t1:.2f}", "T2": f"{t2:.2f}", "T3": f"{t3:.2f}",
+                    "T1→T2": f"{decline:+.2f}", "T2→T3": f"{recovery:+.2f}",
+                    "Net": f"{net:+.2f}", "Recovery": tag
+                })
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-        table_display = table_display[display_cols].sort_values("date_lesson_observed", ascending=False).rename(
-            columns={
-                "term": "Term",
-                "date_lesson_observed": "Date",
-                "fellow_name": "Fellow",
-                "coach_name": "Coach",
-                "school_name": "School",
-                "grade": "Grade",
-                "subject": "Subject",
-                "score": "Avg Score",
-                "class_size": "Class Size",
-                "present_learners": "Present",
-            }
+    # -----------------------------
+    # Strategic Analysis
+    # -----------------------------
+    def _render_strategic_analysis(self, df: pd.DataFrame, segment_col: Optional[str]):
+        st.header("🎯 Strategic Analysis")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("🎪 Strategic Positioning")
+            self._create_strategic_positioning_chart(df)
+        with c2:
+            st.subheader("⚡ Tier Strength Analysis")
+            self._create_tier_strength_analysis(df, segment_col)
+
+        st.subheader("🔍 Pattern Recognition")
+        self._create_pattern_analysis(df)
+
+        st.subheader("💡 Strategic Insights")
+        self._create_strategic_recommendations(df)
+
+    def _create_strategic_positioning_chart(self, df: pd.DataFrame):
+        fig = go.Figure()
+        for dom in sorted(df["domain"].dropna().unique()):
+            d = df[df["domain"] == dom]
+            fig.add_trace(go.Scatter(
+                x=d["dominant_index"], y=d["domain_avg"],
+                mode="markers+text", text=d["term"], textposition="top center",
+                name=dom,
+                marker=dict(
+                    size=(d["tier_mix_t3_pct"].fillna(0) / 2.0).clip(4, 24),
+                    color=self.domain_colors.get(dom, "#888888")
+                ),
+            ))
+        fig.add_vline(x=2.0, line_dash="dash", line_color="gray")
+        fig.add_hline(y=3.0, line_dash="dash", line_color="gray")
+        fig.update_layout(
+            height=460,
+            xaxis_title="Dominant Index (1–3)",
+            yaxis_title="Domain Performance (1–4)",
+            xaxis=dict(range=[1.5, 3.0]),
+            yaxis=dict(range=[1.0, 4.0]),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    def _create_tier_strength_analysis(self, df: pd.DataFrame, segment_col: Optional[str]):
+        rows = []
+        for _, r in df.iterrows():
+            ts = (
+                (r.get("avg_tier_score_t1", np.nan) * r.get("tier_mix_t1_pct", 0) / 100 * 1) +
+                (r.get("avg_tier_score_t2", np.nan) * r.get("tier_mix_t2_pct", 0) / 100 * 2) +
+                (r.get("avg_tier_score_t3", np.nan) * r.get("tier_mix_t3_pct", 0) / 100 * 3)
+            ) / 3
+            rows.append({
+                "Domain": r["domain"],
+                "Term": r["term"],
+                "Tier Strength": ts,
+                "Segment": (r.get(segment_col) if segment_col and segment_col != "both" else "Overall")
+            })
+        if rows:
+            df_ts = pd.DataFrame(rows)
+            fig = px.bar(
+                df_ts, x="Term", y="Tier Strength", color="Domain",
+                facet_col=("Segment" if (segment_col and segment_col != "both") else None),
+                title="Tier Strength Evolution (Performance × Distribution)"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    def _create_pattern_analysis(self, df: pd.DataFrame):
+        st.markdown("### Patterns")
+        notes = []
+        for dom in sorted(df["domain"].dropna().unique()):
+            d = (
+                df[df["domain"] == dom]
+                .groupby("term", as_index=False)["tier_mix_t3_pct"]
+                .mean()
+                .sort_values("term")
+            )
+            if len(d) >= 3:
+                a, b, c = d["tier_mix_t3_pct"].iloc[0:3]
+                if b < a and c > b:
+                    notes.append(f"📈 **{dom}**: U-shape recovery ({a:.0f}% → {b:.0f}% → {c:.0f}%).")
+                elif c > b > a:
+                    notes.append(f"🚀 **{dom}**: Consistent growth ({a:.0f}% → {b:.0f}% → {c:.0f}%).")
+                elif a > b > c:
+                    notes.append(f"📉 **{dom}**: Steady decline ({a:.0f}% → {b:.0f}% → {c:.0f}%).")
+                elif abs(a - c) < 5:
+                    notes.append(f"➡️ **{dom}**: Stable performance ({a:.0f}% ~ {c:.0f}%).")
+                else:
+                    notes.append(f"📊 **{dom}**: Volatile pattern.")
+        if notes:
+            for n in notes:
+                st.markdown(f"- {n}")
+
+    def _create_strategic_recommendations(self, df: pd.DataFrame):
+        latest_term = df["term"].dropna().max()
+        cur = df[df["term"] == latest_term]
+        if cur.empty:
+            st.info("No latest term records to recommend on.")
+            return
+        best = cur.loc[cur["tier_mix_t3_pct"].idxmax()]
+        worst = cur.loc[cur["tier_mix_t3_pct"].idxmin()]
+        st.markdown(
+            f"- 🏆 **Replicate Success**: {best['domain']} strong Tier 3 share (**{best['tier_mix_t3_pct']:.0f}%**)."
+        )
+        st.markdown(
+            f"- 🎯 **Focus Area**: {worst['domain']} lower Tier 3 (**{worst['tier_mix_t3_pct']:.0f}%**). Plan targeted support."
         )
 
-        st.dataframe(table_display, use_container_width=True, height=420, hide_index=True)
-        st.caption(f"Showing **{len(table_display)}** of **{len(filtered)}** observations")
+    # -----------------------------
+    # Comparative Analysis
+    # -----------------------------
+    def _render_comparative_analysis(self, df: pd.DataFrame, segment_col: Optional[str]):
+        st.header("⚖️ Comparative Analysis")
+        if not segment_col or segment_col == "both":
+            st.info("Select **School Level** or **Fellowship Year** in the Segment filter to compare.")
+            return
 
-        csv = table_display.to_csv(index=False)
-        st.download_button(
-            "📥 Export to CSV",
-            data=csv,
-            file_name=f"observations_export_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-            use_container_width=True,
+        # Box by segment
+        fig = px.box(
+            df, x=segment_col, y="domain_avg", color="domain",
+            title=f"Performance Distribution by {segment_col.replace('_',' ').title()}",
         )
+        fig.update_layout(yaxis=dict(range=[1.0, 4.0]))
+        st.plotly_chart(fig, use_container_width=True)
 
-st.divider()
-st.caption("📊 Classroom Observations Dashboard • Streamlit • Standardized HITS view (Term 1–2)")
+        # Progression rate scatter
+        rows = []
+        for seg in sorted(df[segment_col].dropna().unique()):
+            seg_df = df[df[segment_col] == seg]
+            for dom in sorted(seg_df["domain"].dropna().unique()):
+                d = (
+                    seg_df[seg_df["domain"] == dom]
+                    .groupby("term", as_index=False)["tier_mix_t3_pct"]
+                    .mean()
+                    .sort_values("term")
+                )
+                if len(d) >= 2:
+                    start, end = d["tier_mix_t3_pct"].iloc[0], d["tier_mix_t3_pct"].iloc[-1]
+                    rows.append({
+                        "Segment": seg, "Domain": dom,
+                        "Starting T3%": start, "Ending T3%": end,
+                        "Total Change": end - start, "Progression Rate": (end - start) / (len(d) - 1),
+                    })
+        if rows:
+            prog = pd.DataFrame(rows)
+            fig2 = px.scatter(
+                prog, x="Starting T3%", y="Ending T3%", size="Total Change", color="Segment",
+                hover_data=["Domain", "Progression Rate"],
+                title="Progression Trajectories by Segment",
+            )
+            fig2.add_shape(type="line", x0=0, y0=0, x1=100, y1=100, line=dict(color="gray", dash="dash"))
+            st.plotly_chart(fig2, use_container_width=True)
+            st.dataframe(
+                prog.style.format({
+                    "Progression Rate": "{:.2f}%/term",
+                    "Starting T3%": "{:.1f}%", "Ending T3%": "{:.1f}%",
+                    "Total Change": "{:+.1f}%",
+                }),
+                use_container_width=True, hide_index=True,
+            )
+
+# -----------------------------
+# Bootstrapping and data fetch
+# -----------------------------
+def load_tier_mv() -> pd.DataFrame:
+    if get_db is None:
+        return pd.DataFrame()
+    db = get_db()
+    # This must read your materialized view:
+    return db.get_tier_analysis()
+
+def main():
+    df = load_tier_mv()
+    page = EnhancedTierProgressionPage()
+    page.render(df)
+
+if __name__ == "__main__":
+    main()
