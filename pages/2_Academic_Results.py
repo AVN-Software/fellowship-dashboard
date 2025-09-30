@@ -19,8 +19,8 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 # Import database manager
-from utils.supabase.database_manager import DatabaseManager
-
+# At the top of your dashboard files
+from utils.supabase.database_manager import get_db
 # ========================================
 # STYLING & CONSTANTS
 # ========================================
