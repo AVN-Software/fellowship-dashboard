@@ -3,32 +3,32 @@ import streamlit as st
 from datetime import datetime
 from supabase import create_client, Client
 
-
 # ======================================================
-# Configuration (move to secrets.toml in production)
+# Configuration (secure via Streamlit secrets)
 # ======================================================
-SUPABASE_URL = "https://ztxfqtefsgiazwxxxksi.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI..."  # ⚠️ replace with env var in production
+def get_supabase_client() -> Client:
+    try:
+        url = st.secrets["supabase"]["url"]
+        key = st.secrets["supabase"]["anon_key"]
+        return create_client(url, key)
+    except KeyError as e:
+        st.error("❌ Missing Supabase configuration in secrets.toml or Streamlit Secrets.")
+        raise e
 
 
 # ======================================================
 # Database Manager
 # ======================================================
 class DatabaseManager:
-    """
-    Unified interface for querying Supabase/Postgres.
-    Keeps connection logic in one place and provides
-    generic + specialized loaders.
-    """
+    """Unified interface for querying Supabase/Postgres."""
 
-    def __init__(self, url: str = SUPABASE_URL, key: str = SUPABASE_KEY):
-        self.client: Client = create_client(url, key)
+    def __init__(self, client: Client | None = None):
+        self.client: Client = client or get_supabase_client()
 
     # --------------------------
     # Generic Loaders
     # --------------------------
     def load_table(self, table_name: str, columns: str = "*") -> pd.DataFrame:
-        """Load any table or view by name."""
         try:
             response = self.client.table(table_name).select(columns).execute()
             if hasattr(response, "error") and response.error:
@@ -40,10 +40,7 @@ class DatabaseManager:
             return pd.DataFrame()
 
     def run_sql(self, query: str) -> pd.DataFrame:
-        """
-        Run raw SQL via Supabase RPC (requires
-        a Postgres function `execute_sql` defined).
-        """
+        """Run raw SQL via Supabase RPC (requires Postgres function `execute_sql`)."""
         try:
             response = self.client.rpc("execute_sql", {"query": query}).execute()
             return pd.DataFrame(response.data) if response.data else pd.DataFrame()
@@ -54,38 +51,20 @@ class DatabaseManager:
     # --------------------------
     # Specific Views / Datasets
     # --------------------------
-    def get_observations_full(self): 
-        return self.load_table("v_observation_full")
-
-    def get_teacher_wellbeing(self): 
-        return self.load_table("teacher_wellbeing")
-
-    def get_academic_results(self): 
-        return self.load_table("report_academic_results")
-
-    def get_tier_analysis(self): 
-        return self.load_table("mv_comprehensive_tier_analysis")
-
-    def get_coach_feedback(self): 
-        return self.load_table("mv_coach_feedback")
-
-    def get_fellows(self): 
-        return self.load_table("fellows")
-
-    def get_observations(self): 
-        return self.load_table("observations")
-
-    def get_feedback(self): 
-        return self.load_table("feedback")
-
-    def get_domain_scores(self): 
-        return self.load_table("domain_scores")
+    def get_observations_full(self): return self.load_table("v_observation_full")
+    def get_teacher_wellbeing(self): return self.load_table("teacher_wellbeing")
+    def get_academic_results(self): return self.load_table("report_academic_results")
+    def get_tier_analysis(self): return self.load_table("mv_comprehensive_tier_analysis")
+    def get_coach_feedback(self): return self.load_table("mv_coach_feedback")
+    def get_fellows(self): return self.load_table("fellows")
+    def get_observations(self): return self.load_table("observations")
+    def get_feedback(self): return self.load_table("feedback")
+    def get_domain_scores(self): return self.load_table("domain_scores")
 
     # --------------------------
     # Batch Loader
     # --------------------------
     def load_all(self):
-        """Load all main datasets at once (for dashboards)."""
         return {
             "observations_full": self.get_observations_full(),
             "teacher_wellbeing": self.get_teacher_wellbeing(),
@@ -103,7 +82,6 @@ class DatabaseManager:
     # Connection Test
     # --------------------------
     def test_connection(self) -> bool:
-        """Quick check to confirm Supabase connection is alive."""
         try:
             self.client.table("observations").select("*").limit(1).execute()
             return True
@@ -117,12 +95,14 @@ class DatabaseManager:
 # ======================================================
 @st.cache_data
 def get_db() -> DatabaseManager:
-    """Cached singleton DB connection for Streamlit."""
     return DatabaseManager()
 
 
 db = get_db()
 
+# --------------------------
+# Demo UI
+# --------------------------
 st.title("📊 Supabase Data Preview")
 
 st.subheader("🌱 Teacher Wellbeing")
