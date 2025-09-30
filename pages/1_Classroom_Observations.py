@@ -11,6 +11,8 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+# add this near the top:
+from utils.supabase.database_manager import get_db
 
 # =========================
 # Page Config
@@ -70,105 +72,203 @@ def _grade_key(g):
         return int(str(g).split()[-1])
     except Exception:
         return 9999
-
 # =========================
-# Sample Data (cached)
+# Data (DB-backed with safe fallback)
 # =========================
-@st.cache_data
-def generate_sample_data(num_terms=2, seed=42):
-    np.random.seed(seed)
+@st.cache_data(show_spinner=True)
+def load_observation_data():
+    """
+    Loads from Supabase view `v_observation_full`.
+    Produces:
+      - df_observations : one row per observation_id (lesson-level fields)
+      - df_domain_scores: domain-level rows (observation_id, domain, score, classification)
+      - df_full         : observation-level with `score` = mean of domain scores
+      - TERM_OPTIONS, SUBJECTS, GRADES for filters
+    Fallbacks to generated sample data if DB is empty/unavailable.
+    """
+    try:
+        db = get_db()
+        df_view = db.get_observations_full()  # expects your materialized view / view
 
-    fellows = [f"Fellow {i}" for i in range(1, 96)]
-    coaches = ["Coach Sarah", "Coach John", "Coach Maria", "Coach David", "Coach Lisa"]
-    subjects = ["Mathematics", "English", "Life Sciences", "Physical Sciences", "History"]
-    grades = ["Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"]
-    schools = ["Park High", "Ridge Secondary", "Valley School", "Summit Academy", "Horizon High"]
-
-    all_terms = ["Term 1", "Term 2", "Term 3"]
-    terms = all_terms[:num_terms]
-
-    observations, domain_scores = [], []
-    obs_id_counter = 1
-
-    for term_idx, term in enumerate(terms):
-        num_obs_term = 70 + (term_idx * 15)
-        for _ in range(num_obs_term):
-            fellow = np.random.choice(fellows)
-            fellowship_year = 1 if fellows.index(fellow) < 45 else 2
-            coach = np.random.choice(coaches)
-            subject = np.random.choice(subjects)
-            grade = np.random.choice(grades)
-            school = np.random.choice(schools)
-
-            base_date = datetime(2024, 1, 1) + timedelta(days=term_idx * 90)
-            date_observed = base_date + timedelta(days=np.random.randint(0, 80))
-
-            class_size = np.random.randint(25, 45)
-            present_learners = int(class_size * np.random.uniform(0.8, 0.95))
-
-            obs_id = f"obs_{obs_id_counter}"
-            observations.append(
-                {
-                    "observation_id": obs_id,
-                    "term": term,
-                    "date_lesson_observed": date_observed.date(),
-                    "time_lesson": f"{np.random.randint(8,15)}:00",
-                    "fellowship_year": fellowship_year,
-                    "coach_name": coach,
-                    "fellow_name": fellow,
-                    "school_name": school,
-                    "grade": grade,
-                    "subject": subject,
-                    "class_size": class_size,
-                    "present_learners": present_learners,
-                }
+        if df_view is not None and not df_view.empty:
+            # --- domain-level ---
+            keep_domain_cols = ["observation_id", "domain", "score", "classification"]
+            df_domain_scores = (
+                df_view[keep_domain_cols]
+                .dropna(subset=["observation_id"])
+                .copy()
             )
 
-            base_score = 2.0 + (fellowship_year - 1) * 0.4 + term_idx * 0.25
-            difficulty = {"LE": 0.3, "SE": 0.2, "KPC": 0.1, "AII": -0.1, "IAL": -0.2, "IAN": -0.3}
+            # --- observation-level (dedupe by observation_id) ---
+            obs_cols = [
+                "observation_id","term","date_lesson_observed","time_lesson",
+                "fellowship_year","coach_name","fellow_name","school_name",
+                "grade","subject","class_size","present_learners",
+            ]
+            # Keep only columns that exist (robust if schema shifts)
+            obs_cols = [c for c in obs_cols if c in df_view.columns]
 
-            for d in DOMAINS:
-                s = base_score + difficulty[d] + np.random.uniform(-0.3, 0.3)
-                s = max(1.0, min(4.0, s))
-                tier = "Tier 1" if s < 2.3 else ("Tier 2" if s < 3.2 else "Tier 3")
-                domain_scores.append({"observation_id": obs_id, "domain": d, "classification": tier, "score": round(s, 2)})
+            df_observations = (
+                df_view[obs_cols]
+                .drop_duplicates(subset=["observation_id"])
+                .copy()
+            )
 
-            obs_id_counter += 1
+            # --- compute mean domain score per observation ---
+            avg_by_obs = (
+                df_domain_scores
+                .groupby("observation_id", as_index=False)["score"]
+                .mean()
+                .rename(columns={"score": "score"})
+            )
+            df_full = df_observations.merge(avg_by_obs, on="observation_id", how="left")
 
-    df_obs = pd.DataFrame(observations)
-    df_ds = pd.DataFrame(domain_scores)
+            # --- filter facets ---
+            # Limit to Term 1 & 2 if present (keep your page focus)
+            term_order = {"Term 1": 1, "Term 2": 2, "Term 3": 3, "Term 4": 4}
+            terms_raw = sorted(df_full["term"].dropna().unique(), key=lambda t: term_order.get(t, 999))
+            TERM_OPTIONS = [t for t in terms_raw if t in ("Term 1", "Term 2")] or terms_raw[:2]
 
-    df_full = df_obs.merge(
-        df_ds.groupby("observation_id")["score"].mean().reset_index(),
-        on="observation_id",
-        how="left",
+            SUBJECTS = sorted(df_full["subject"].dropna().unique()) if "subject" in df_full.columns else []
+            GRADES   = sorted(df_full["grade"].dropna().unique(), key=_grade_key) if "grade" in df_full.columns else []
+
+            return df_observations, df_domain_scores, df_full, TERM_OPTIONS, SUBJECTS, GRADES
+
+        # If we got here, DB returned nothing → fall back
+        st.warning("`v_observation_full` returned no rows; using sample data fallback.")
+        raise RuntimeError("Empty DB result")
+
+    except Exception:
+        # ---------- FALLBACK: sample generator ----------
+        st.info("Using generated sample data (DB unavailable or empty).")
+        np.random.seed(42)
+
+        fellows = [f"Fellow {i}" for i in range(1, 96)]
+        coaches = ["Coach Sarah", "Coach John", "Coach Maria", "Coach David", "Coach Lisa"]
+        subjects = ["Mathematics", "English", "Life Sciences", "Physical Sciences", "History"]
+        grades = ["Grade 8", "Grade 9", "Grade 10", "Grade 11", "Grade 12"]
+        schools = ["Park High", "Ridge Secondary", "Valley School", "Summit Academy", "Horizon High"]
+
+        all_terms = ["Term 1", "Term 2", "Term 3"]
+        terms = all_terms[:2]
+
+        observations, domain_scores = [], []
+        obs_id_counter = 1
+
+        for term_idx, term in enumerate(terms):
+            num_obs_term = 70 + (term_idx * 15)
+            for _ in range(num_obs_term):
+                fellow = np.random.choice(fellows)
+                fellowship_year = 1 if fellows.index(fellow) < 45 else 2
+                coach = np.random.choice(coaches)
+                subject = np.random.choice(subjects)
+                grade = np.random.choice(grades)
+                school = np.random.choice(schools)
+
+                base_date = datetime(2024, 1, 1) + timedelta(days=term_idx * 90)
+                date_observed = base_date + timedelta(days=np.random.randint(0, 80))
+
+                class_size = np.random.randint(25, 45)
+                present_learners = int(class_size * np.random.uniform(0.8, 0.95))
+
+                obs_id = f"obs_{obs_id_counter}"
+                observations.append(
+                    {
+                        "observation_id": obs_id,
+                        "term": term,
+                        "date_lesson_observed": date_observed.date(),
+                        "time_lesson": f"{np.random.randint(8,15)}:00",
+                        "fellowship_year": fellowship_year,
+                        "coach_name": coach,
+                        "fellow_name": fellow,
+                        "school_name": school,
+                        "grade": grade,
+                        "subject": subject,
+                        "class_size": class_size,
+                        "present_learners": present_learners,
+                    }
+                )
+
+                base_score = 2.0 + (fellowship_year - 1) * 0.4 + term_idx * 0.25
+                difficulty = {"LE": 0.3, "SE": 0.2, "KPC": 0.1, "AII": -0.1, "IAL": -0.2, "IAN": -0.3}
+
+                for d in ["KPC","LE","SE","AII","IAL","IAN"]:
+                    s = base_score + difficulty[d] + np.random.uniform(-0.3, 0.3)
+                    s = max(1.0, min(4.0, s))
+                    tier = "Tier 1" if s < 2.3 else ("Tier 2" if s < 3.2 else "Tier 3")
+                    domain_scores.append({"observation_id": obs_id, "domain": d, "classification": tier, "score": round(s, 2)})
+
+                obs_id_counter += 1
+
+        df_observations = pd.DataFrame(observations)
+        df_domain_scores = pd.DataFrame(domain_scores)
+        df_full = df_observations.merge(
+            df_domain_scores.groupby("observation_id")["score"].mean().reset_index(),
+            on="observation_id",
+            how="left",
+        )
+        TERM_OPTIONS = ["Term 1", "Term 2"]
+        SUBJECTS = sorted(df_observations["subject"].unique())
+        GRADES = sorted(df_observations["grade"].unique(), key=_grade_key)
+
+        return df_observations, df_domain_scores, df_full, TERM_OPTIONS, SUBJECTS, GRADES
+
+
+# Load data now (DB or fallback)
+df_observations, df_domain_scores, df_full, TERM_OPTIONS, SUBJECTS, GRADES = load_observation_data()
+# =========================
+# Top Filter Bar (replaces sidebar)
+# =========================
+toolbar = st.container()
+with toolbar:
+    st.markdown("### 🎛️ Filters")
+    c1, c2, c3, c4, c5 = st.columns([1.2, 1.4, 1.2, 1.0, 0.7])
+
+    # guard against missing facet lists
+    _terms   = TERM_OPTIONS if len(TERM_OPTIONS) else []
+    _subjects= sorted(SUBJECTS) if len(SUBJECTS) else []
+    _grades  = sorted(GRADES, key=_grade_key) if len(GRADES) else []
+
+    flt_terms = c1.multiselect(
+        "Term",
+        options=_terms,
+        default=_terms,
+        key="flt_terms",
+        help="Select one or more terms",
     )
-    return df_obs, df_ds, df_full, terms, subjects, grades
 
-# =========================
-# Data
-# =========================
-df_observations, df_domain_scores, df_full, TERM_OPTIONS, SUBJECTS, GRADES = generate_sample_data(num_terms=len(TERMS))
+    flt_subjects = c2.multiselect(
+        "Subject",
+        options=_subjects,
+        default=_subjects,
+        key="flt_subjects",
+    )
 
-# =========================
-# Sidebar Filters
-# =========================
-with st.sidebar:
-    st.header("🎛️ Filters")
-    st.caption("These apply across all tabs.")
+    flt_grades = c3.multiselect(
+        "Grade",
+        options=_grades,
+        default=_grades,
+        key="flt_grades",
+    )
 
-    flt_terms = st.multiselect("Term", options=TERM_OPTIONS, default=TERM_OPTIONS, key="flt_terms")
-    flt_subjects = st.multiselect("Subject", options=sorted(SUBJECTS), default=list(SUBJECTS), key="flt_subjects")
-    grade_sorted = sorted(GRADES, key=_grade_key)
-    flt_grades = st.multiselect("Grade", options=grade_sorted, default=grade_sorted, key="flt_grades")
-    flt_year = st.radio("Fellowship Year", options=["Both", "Year 1", "Year 2"], horizontal=True, key="flt_year")
+    flt_year = c4.radio(
+        "Fellowship Year",
+        options=["Both", "Year 1", "Year 2"],
+        horizontal=True,
+        key="flt_year",
+        index=0,
+    )
 
-    st.markdown("---")
-    if st.button("♻️ Reset filters", use_container_width=True):
-        reset_filters()
+    # Reset button on the far right
+    if c5.button("♻️ Reset", use_container_width=True, key="flt_reset"):
+        for k in list(st.session_state.keys()):
+            if k.startswith("flt_") or k.startswith("tab_"):
+                del st.session_state[k]
         st.rerun()
 
+# =========================
 # Apply filters (global)
+# =========================
 filtered = df_full[
     df_full["term"].isin(flt_terms)
     & df_full["subject"].isin(flt_subjects)
@@ -179,7 +279,9 @@ if flt_year != "Both":
     y = 1 if flt_year.endswith("1") else 2
     filtered = filtered[filtered["fellowship_year"] == y]
 
-filtered_domain = df_domain_scores[df_domain_scores["observation_id"].isin(filtered["observation_id"])].copy()
+filtered_domain = df_domain_scores[
+    df_domain_scores["observation_id"].isin(filtered["observation_id"])
+].copy()
 
 # =========================
 # Header
