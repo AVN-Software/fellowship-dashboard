@@ -1,0 +1,20 @@
+{
+  "analysis": {
+    "risk_threshold": 0.6,
+    "tier_threshold_strict": 0.7,
+    "tier_threshold_lower": 0.6
+  },
+  "domains": {
+    "kpc": "Knowledge Progression & Connections",
+    "le": "Learning Environment",
+    "se": "Student Engagement",
+    "aii": "Assessment-Informed Instruction",
+    "ian": "Instructional Approach - Numeracy",
+    "ial": "Instructional Approach - Literacy"
+  },
+  "tier_definitions": {
+    "tier_1": "Foundation - Basic strategies",
+    "tier_2": "Developing - Intermediate strategies",
+    "tier_3": "Advanced - Complex differentiated strategies"
+  }
+}

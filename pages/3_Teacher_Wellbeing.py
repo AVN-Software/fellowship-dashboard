@@ -137,85 +137,16 @@ def random_sa_id(n=13):
     return "".join(np.random.choice(list("0123456789"), size=n))
 
 # =========================
-# Sample Data (cached)
-# Replace with live fetch when ready
+# Data Fetch (via DatabaseManager)
 # =========================
 @st.cache_data
-def generate_sample_wellbeing_data(seed=42):
-    np.random.seed(seed)
-
-    fellows = [f"Fellow {i}" for i in range(1, 96)]
-    coaches = ["Coach Sarah", "Coach John", "Coach Maria", "Coach David", "Coach Lisa"]
-    categories = ["Western Cape - School A", "Eastern Cape - School B", "Gauteng - School C"]
-    phases = ["Foundation", "Intermediate", "Senior"]
-
-    # Deterministic Phase & Year mapping per fellow
-    def fellow_phase(name):
-        idx = int(name.split()[-1])
-        return phases[(idx - 1) % 3]
-
-    def fellow_year(name):
-        idx = int(name.split()[-1])
-        return 1 if idx <= 45 else 2
-
-    rows = []
-    sid = 1
-    for t_idx, term in enumerate(TERMS):
-        # partial response by wave
-        n = int(len(fellows) * (0.70 + t_idx * 0.10))  # e.g., Term2 slightly higher response
-        chosen = np.random.choice(fellows, n, replace=False)
-
-        for fellow in chosen:
-            yr = fellow_year(fellow)
-            ph = fellow_phase(fellow)
-
-            # gentle uplift over time + year 2 advantage
-            base = 1.9 + (yr - 1) * 0.25 + t_idx * 0.18
-
-            row = {
-                "id": sid,
-                "term": term,
-                "date": pd.Timestamp(2024, 3 + t_idx * 3, 15),
-                "name_of_facilitator": np.random.choice(coaches),
-                "name_of_client": fellow,
-                "date_of_survey": pd.Timestamp(2024, 3 + t_idx * 3, np.random.randint(1, 28)),
-                "identity_card": random_sa_id(),
-                "category": np.random.choice(categories),
-                "sub_category": f"Co{yr}/{2024 + yr}",
-                "phase": ph,
-                "longitude": round(np.random.uniform(18.0, 28.0), 6),
-                "latitude": round(np.random.uniform(-34.0, -26.0), 6),
-            }
-
-            # dimension difficulty modifiers
-            dim_mod = {
-                "Income & Employment": -0.35, "Home Environment & Community": -0.25, "Health & Environment": -0.18,
-                "School Environment & Participation": 0.18, "Awareness & Emotions": 0.28, "Learning (Others)": 0.18,
-                "Meaning (Self)": 0.10, "Relationships": 0.12, "Education & Culture": 0.08
-            }
-
-            all_scores = []
-            for dim, items in DIMENSIONS.items():
-                mod = dim_mod.get(dim, 0.0)
-                for item in items:
-                    s = base + mod + np.random.uniform(-0.35, 0.35)
-                    s = max(SCORE_MIN, min(SCORE_MAX, int(round(s))))  # clamp + round to 1..3
-                    row[item] = s
-                    all_scores.append(s)
-
-            row["doing_well"] = int(sum(1 for s in all_scores if s == 3))
-            row["trying_but_struggling"] = int(sum(1 for s in all_scores if s == 2))
-            row["stuck"] = int(sum(1 for s in all_scores if s == 1))
-
-            rows.append(row)
-            sid += 1
-
-    df = pd.DataFrame(rows)
-    # Derive fellowship year (1/2) from sub_category "Co1/2025"
-    df["fellowship_year"] = df["sub_category"].str.extract(r"Co(\d)").astype(int)
+def load_wellbeing_data():
+    db = DatabaseManager()   # uses your Supabase URL/KEY inside
+    df = db.get_teacher_wellbeing()  # load from Supabase table
     return df
 
-df_surveys = generate_sample_wellbeing_data()
+df_surveys = load_wellbeing_data()
+
 
 # =========================
 # Sidebar Filters (global)
@@ -533,115 +464,6 @@ with tab_indicators:
         else:
             st.success("✅ All indicators above the 2.0 threshold for this domain.")
 
-# -------------------------
-# At-Risk (fellows)
-# -------------------------
-with tab_risk:
-    st.subheader("Fellows At-Risk")
-    if len(filtered) == 0:
-        st.warning("No data available for selected filters.")
-    else:
-        data = []
-        for _, row in filtered.iterrows():
-            ov = float(row[ALL_ITEMS].mean())
-            total = int(row["doing_well"] + row["trying_but_struggling"] + row["stuck"])
-            pct_str = (row["stuck"] / total * 100) if total else 0
-            crit_domains = []
-            for d, items in DIMENSIONS.items():
-                ds = float(row[items].mean())
-                if ds < 2.0:
-                    crit_domains.append(f"{d} ({ds:.2f})")
-            risky = (ov < 2.0) or (pct_str > 30)
-            if risky:
-                data.append({
-                    "Fellow": row["name_of_client"],
-                    "Term": row["term"],
-                    "Phase": row["phase"],
-                    "Year": f"Year {int(row['fellowship_year'])}",
-                    "Overall": ov,
-                    "% Struggling": pct_str,
-                    "Critical Domains": ", ".join(crit_domains) if crit_domains else "None",
-                    "Risk": risk_bucket(ov),
-                })
-        if data:
-            rdf = pd.DataFrame(data).sort_values("Overall")
-            st.error(f"🚨 {len(rdf)} survey rows flagged at-risk (overall < 2.0 or >30% struggling).")
-            show = rdf.copy()
-            show["Overall"] = show["Overall"].map(lambda x: f"{x:.2f}")
-            show["% Struggling"] = show["% Struggling"].map(lambda x: f"{x:.1f}%")
-            st.dataframe(show, use_container_width=True, hide_index=True)
-
-            c1,c2,c3 = st.columns(3)
-            with c1: st.metric("🚨 High Risk", int((rdf["Risk"]=="🚨 High Risk").sum()), help="Overall < 1.8")
-            with c2: st.metric("⚠️ At Risk", int((rdf["Risk"]=="⚠️ At Risk").sum()), help="1.8–2.2")
-            with c3: st.metric("⚡ Moderate", int((rdf["Risk"]=="⚡ Moderate").sum()), help="2.2–2.6")
-        else:
-            st.success("✅ No at-risk survey rows under current filters.")
-
-# -------------------------
-# Fellows (profile)
-# -------------------------
-with tab_fellows:
-    st.subheader("Individual Fellow Profile")
-    if len(filtered) == 0:
-        st.warning("No data available for selected filters.")
-    else:
-        sel_fellow = st.selectbox("Select Fellow", options=sorted(filtered["name_of_client"].unique()), key="tab_fellow_sel")
-        fdf = filtered[filtered["name_of_client"]==sel_fellow].sort_values("date_of_survey")
-        if len(fdf)==0:
-            st.warning("No surveys for the selected fellow under current filters.")
-        else:
-            latest = fdf.iloc[-1]
-            latest_overall = float(pd.DataFrame([latest])[ALL_ITEMS].mean(axis=1).iloc[0])
-
-            c1,c2,c3,c4 = st.columns(4)
-            with c1: st.metric("Surveys Completed", len(fdf))
-            with c2:
-                st.metric("Latest Overall", f"{latest_overall:.2f}")
-                st.caption(risk_bucket(latest_overall))
-            with c3:
-                tot = int(latest["doing_well"] + latest["trying_but_struggling"] + latest["stuck"])
-                pct_c3 = (latest["doing_well"]/tot*100) if tot else 0
-                st.metric("% Confident (Latest)", f"{pct_c3:.0f}%")
-            with c4:
-                pct_s = (latest["stuck"]/tot*100) if tot else 0
-                st.metric("% Struggling (Latest)", f"{pct_s:.0f}%")
-
-            # Radar for latest
-            d_scores = {d: float(pd.DataFrame([latest])[items].mean(axis=1).iloc[0]) for d,items in DIMENSIONS.items()}
-            fig_r = go.Figure()
-            fig_r.add_trace(go.Scatterpolar(
-                r=list(d_scores.values()), theta=list(d_scores.keys()),
-                fill='toself', name=sel_fellow,
-                line=dict(color=COLORS["years"]["Year 1"], width=2),
-                fillcolor='rgba(78,121,167,0.25)'
-            ))
-            fig_r.update_layout(polar=dict(radialaxis=dict(visible=True, range=[SCORE_MIN,SCORE_MAX])), showlegend=False, height=380, title=f"Domain Scores — {latest['term']}")
-            st.plotly_chart(fig_r, use_container_width=True)
-
-            # Progress line if >1
-            if len(fdf) > 1:
-                recs = []
-                for _, r in fdf.iterrows():
-                    recs.append({"term": r["term"], "date": r["date_of_survey"], "overall": float(pd.DataFrame([r])[ALL_ITEMS].mean(axis=1).iloc[0])})
-                prog = pd.DataFrame(recs)
-                prog["order"] = prog["term"].map({t:i for i,t in enumerate(TERMS)})
-                prog = prog.sort_values("order")
-                fig_p = px.line(
-                    prog, x="term", y="overall", markers=True,
-                    title=f"{sel_fellow} — Wellbeing Progress",
-                    labels={"overall":"Overall Score","term":"Term"},
-                    color_discrete_sequence=[COLORS["traffic"]["neutral"]],
-                    category_orders={"term": TERMS}
-                )
-                fig_p.update_layout(height=330, yaxis_range=[SCORE_MIN,SCORE_MAX])
-                st.plotly_chart(fig_p, use_container_width=True)
-
-            crit = [d for d,v in d_scores.items() if v < 2.0]
-            if crit:
-                st.warning(f"⚠️ {len(crit)} domains below 2.0: " + ", ".join(f"{d} ({d_scores[d]:.2f})" for d in crit))
-            else:
-                st.success("✅ All domains above 2.0.")
 
 # -------------------------
 # Data Explorer

@@ -1,10 +1,27 @@
+# Python
 __pycache__/
 *.pyc
-.env
-venv/
+*.pyo
+*.pyd
 .venv/
-*.log
+venv/
+.env
+.env.*
+
+# OS junk
 .DS_Store
-.streamlit/
+
+# Jupyter (if any)
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/secrets.toml
+.streamlit/**/secrets.toml
+
+# Node bits (if any)
+node_modules/
+
+# Data caches
+cache/
+data/*.parquet
 data/*.csv
-data/*.xlsx
