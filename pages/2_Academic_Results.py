@@ -41,12 +41,16 @@ PASS_THRESHOLD = 50.0
 # ========================================
 # DATA LOADING
 # ========================================
+from utils.supabase.database_manager import get_db
 
+# Then use it like this:
+db = get_db()
+df = db.get_academic_results()
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_academic_data():
     """Fetch academic results using DatabaseManager."""
     try:
-        db = DatabaseManager()
+        db = get_db()
         df = db.get_academic_results()
         
         if len(df) > 0:
