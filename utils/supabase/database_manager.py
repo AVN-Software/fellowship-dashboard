@@ -1,6 +1,5 @@
 # utils/supabase/database_manager.py
 from __future__ import annotations
-import os
 from typing import Optional, Dict
 from datetime import datetime
 
@@ -9,35 +8,23 @@ import streamlit as st
 from supabase import create_client, Client
 
 # ======================================================
-# Client factory (secrets → env vars)
+# Client factory (secrets only – no getenv)
 # ======================================================
 def _build_supabase_client() -> Optional[Client]:
     """
-    Create Supabase client from (in order):
-      1) Streamlit secrets: st.secrets["supabase"]["url"], ["anon_key"]
-      2) Environment variables: SUPABASE_URL, SUPABASE_ANON_KEY
+    Create Supabase client from Streamlit secrets:
+        st.secrets["supabase"]["url"]
+        st.secrets["supabase"]["anon_key"]
     Returns None if not configured.
     """
-    url = None
-    key = None
-
-    # 1) Streamlit secrets (preferred)
     try:
         url = st.secrets["supabase"]["url"]        # type: ignore[attr-defined]
         key = st.secrets["supabase"]["anon_key"]   # type: ignore[attr-defined]
     except Exception:
-        pass
-
-    # 2) Environment variables (fallback)
-    url = url or os.getenv("SUPABASE_URL")
-    key = key or os.getenv("SUPABASE_ANON_KEY")
-
-    if not url or not key:
         st.warning(
             "Missing Supabase credentials. Add to `.streamlit/secrets.toml` as:\n"
             "[supabase]\nurl = \"https://YOUR-PROJECT.supabase.co\"\n"
-            "anon_key = \"...\"\n"
-            "or set env vars SUPABASE_URL / SUPABASE_ANON_KEY."
+            "anon_key = \"YOUR_ANON_KEY\""
         )
         return None
 
@@ -128,11 +115,11 @@ class DatabaseManager:
 
 
 # ======================================================
-# Streamlit singleton
+# Streamlit singleton (resource, not data)
 # ======================================================
-@st.cache_data
+@st.cache_resource(show_spinner=False)
 def get_db() -> DatabaseManager:
-    """Shared, cached DB instance for all pages."""
+    """Shared, cached DB instance for all pages (not pickled)."""
     return DatabaseManager()
 
 
